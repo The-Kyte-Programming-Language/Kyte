@@ -3,6 +3,8 @@ use crate::ast::Token;
 pub struct Lexer {
     input: Vec<char>,
     pos: usize,
+    line: usize,
+    col: usize,
 }
 
 impl Lexer {
@@ -10,6 +12,8 @@ impl Lexer {
         Lexer {
             input: source.chars().collect(),
             pos: 0,
+            line: 1,
+            col: 0,
         }
     }
 
@@ -20,25 +24,28 @@ impl Lexer {
     fn advance(&mut self) -> Option<char> {
         let ch = self.current();
         self.pos += 1;
+        match ch {
+            Some('\n') => { self.line += 1; self.col = 0; }
+            Some(_)    => { self.col += 1; }
+            None       => {}
+        }
         ch
     }
 
-    fn skip_whitespace(&mut self) {
-        while let Some(ch) = self.current() {
-            if ch.is_whitespace() {
-                self.advance();
+    fn skip_whitespace_and_comments(&mut self) {
+        loop {
+            // 공백 제거
+            while let Some(ch) = self.current() {
+                if ch.is_whitespace() { self.advance(); } else { break; }
+            }
+            // // 주석 처리
+            if self.current() == Some('/') && self.input.get(self.pos + 1) == Some(&'/') {
+                while let Some(ch) = self.current() {
+                    if ch == '\n' { break; }
+                    self.advance();
+                }
             } else {
                 break;
-            }
-        }
-    }
-
-    fn skip_comment(&mut self) {
-        // // 주석 처리
-        if self.current() == Some('/') && self.input.get(self.pos + 1) == Some(&'/') {
-            while let Some(ch) = self.current() {
-                if ch == '\n' { break; }
-                self.advance();
             }
         }
     }
@@ -48,8 +55,22 @@ impl Lexer {
         let mut s = String::new();
         while let Some(ch) = self.current() {
             if ch == '"' { self.advance(); break; }
-            s.push(ch);
-            self.advance();
+            if ch == '\\' {
+                self.advance();
+                match self.current() {
+                    Some('n')  => { s.push('\n'); self.advance(); }
+                    Some('t')  => { s.push('\t'); self.advance(); }
+                    Some('r')  => { s.push('\r'); self.advance(); }
+                    Some('\\') => { s.push('\\'); self.advance(); }
+                    Some('"')  => { s.push('"');  self.advance(); }
+                    Some('0')  => { s.push('\0'); self.advance(); }
+                    Some(c)    => { s.push('\\'); s.push(c); self.advance(); }
+                    None       => { s.push('\\'); }
+                }
+            } else {
+                s.push(ch);
+                self.advance();
+            }
         }
         Token::StringLit(s)
     }
@@ -62,6 +83,10 @@ impl Lexer {
                 s.push(ch);
                 self.advance();
             } else if ch == '.' && !is_float {
+                // '..'(범위 연산자)이면 소수점으로 처리하지 않음
+                if self.input.get(self.pos + 1) == Some(&'.') {
+                    break;
+                }
                 is_float = true;
                 s.push(ch);
                 self.advance();
@@ -89,10 +114,10 @@ impl Lexer {
         // 키워드 판별
         match s.as_str() {
             "main"     => Token::Main,
-            "function" => Token::Function,
-            "Vault"    => Token::Vault,
-            "Kill"     => Token::Kill,
-            "Exit"     => Token::Exit,
+            "fn" | "function" => Token::Function,
+            "Vault" | "vault" => Token::Vault,
+            "Kill"  | "kill"  => Token::Kill,
+            "Exit"  | "exit"  => Token::Exit,
             "yield"    => Token::Yield,
             "return"   => Token::Return,
             "if"       => Token::If,
@@ -113,15 +138,15 @@ impl Lexer {
         }
     }
 
-    pub fn tokenize(&mut self) -> Vec<Token> {
+    pub fn tokenize(&mut self) -> Vec<(Token, usize, usize)> {
         let mut tokens = Vec::new();
         loop {
-            self.skip_whitespace();
-            self.skip_comment();
-            self.skip_whitespace();
+            self.skip_whitespace_and_comments();
+            let start_line = self.line;
+            let start_col = self.col;
 
             match self.current() {
-                None => { tokens.push(Token::EOF); break; }
+                None => { tokens.push((Token::EOF, start_line, start_col)); break; }
                 Some(ch) => {
                     let tok = match ch {
                         '@' => { self.advance(); Token::At }
@@ -132,23 +157,107 @@ impl Lexer {
                         '}' => { self.advance(); Token::RBrace }
                         ';' => { self.advance(); Token::Semicolon }
                         ',' => { self.advance(); Token::Comma }
-                        '+' => { self.advance(); Token::Plus }
-                        '*' => { self.advance(); Token::Star }
-                        '<' => { self.advance(); Token::Lt }
-                        '>' => { self.advance(); Token::Gt }
-                        '=' => { self.advance(); Token::Eq }
+                        '+' => {
+                            self.advance();
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::PlusEq
+                            } else {
+                                Token::Plus
+                            }
+                        }
+                        '*' => {
+                            self.advance();
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::StarEq
+                            } else {
+                                Token::Star
+                            }
+                        }
+                        '%' => {
+                            self.advance();
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::PercentEq
+                            } else {
+                                Token::Percent
+                            }
+                        }
+                        '!' => {
+                            self.advance();
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::Neq
+                            } else {
+                                Token::Not
+                            }
+                        }
+                        '<' => {
+                            self.advance();
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::Le
+                            } else {
+                                Token::Lt
+                            }
+                        }
+                        '>' => {
+                            self.advance();
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::Ge
+                            } else {
+                                Token::Gt
+                            }
+                        }
+                        '=' => {
+                            self.advance();
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::EqEq
+                            } else {
+                                Token::Eq
+                            }
+                        }
+                        '&' => {
+                            self.advance();
+                            if self.current() == Some('&') {
+                                self.advance();
+                                Token::And
+                            } else {
+                                continue;
+                            }
+                        }
+                        '|' => {
+                            self.advance();
+                            if self.current() == Some('|') {
+                                self.advance();
+                                Token::Or
+                            } else {
+                                continue;
+                            }
+                        }
                         '-' => {
                             self.advance();
                             if self.current() == Some('>') {
                                 self.advance();
                                 Token::Arrow
+                            } else if self.current() == Some('=') {
+                                self.advance();
+                                Token::MinusEq
                             } else {
                                 Token::Minus
                             }
                         }
                         '/' => {
                             self.advance();
-                            Token::Slash
+                            if self.current() == Some('=') {
+                                self.advance();
+                                Token::SlashEq
+                            } else {
+                                Token::Slash
+                            }
                         }
                         '.' => {
                             self.advance();
@@ -165,7 +274,7 @@ impl Lexer {
                         c if c.is_alphabetic() || c == '_' => self.read_ident(),
                         _ => { self.advance(); continue; }
                     };
-                    tokens.push(tok);
+                    tokens.push((tok, start_line, start_col));
                 }
             }
         }

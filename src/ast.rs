@@ -45,13 +45,26 @@ pub enum Token {
     Semicolon,    // ;
     Comma,        // ,
     Eq,           // =
+    EqEq,         // ==
+    Neq,          // !=
+    Le,           // <=
+    Ge,           // >=
     Arrow,        // ->
     DotDot,       // ..
     Plus,         // +
     Minus,        // -
     Star,         // *
     Slash,        // /
-    Lt,           // 
+    Percent,      // %
+    PlusEq,       // +=
+    MinusEq,      // -=
+    StarEq,       // *=
+    SlashEq,      // /=
+    PercentEq,    // %=
+    Not,          // !
+    And,          // &&
+    Or,           // ||
+    Lt,           // <
     Gt,           // >
     
     // 기타 
@@ -62,10 +75,18 @@ pub enum Token {
 #[derive(Debug, PartialEq, Clone)]
 pub enum AnchorKind {
     Main,
+    Plain,           // @handler(retry(3)) — no explicit kind
     Event(String),   // @handler(event("click"))
     Thread,          // @worker(thread)
     OnError,         // @recovery(on_error)
     Timeout(u64),    // @limiter(timeout(5000))
+}
+
+// 위치 정보
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct Span {
+    pub line: usize,
+    pub col: usize,
 }
 
 // 타입
@@ -85,6 +106,10 @@ pub enum Expr {
     StringLit(String),
     Bool(bool),
     Ident(String),
+    UnaryOp {
+        op:   UnaryOpKind,
+        expr: Box<Expr>,
+    },
     BinOp {
         left:  Box<Expr>,
         op:    BinOpKind,
@@ -97,9 +122,16 @@ pub enum Expr {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub enum UnaryOpKind {
+    Neg, // -
+    Not, // !
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum BinOpKind {
-    Add, Sub, Mul, Div,
-    Lt, Gt, Eq,
+    Add, Sub, Mul, Div, Mod,
+    Lt, Gt, Eq, Neq, Le, Ge,
+    And, Or,
 }
 
 // 구문(Statement)
@@ -122,8 +154,14 @@ pub enum Stmt {
         name:  String,
         value: Expr,
     },
-    // Kill "메시지";
-    Kill(Option<String>),
+    // x += 10;  x -= 5;  etc.
+    CompoundAssign {
+        name:  String,
+        op:    BinOpKind,
+        value: Expr,
+    },
+    // Kill "메시지"; 또는 Kill expr;
+    Kill(Option<Expr>),
     // Exit;
     Exit,
     // yield expr;
@@ -133,22 +171,29 @@ pub enum Stmt {
     // if expr { ... } else { ... }
     If {
         cond:      Expr,
-        then_body: Vec<Stmt>,
-        else_body: Option<Vec<Stmt>>,
+        then_body: Vec<(Stmt, Span)>,
+        else_body: Option<Vec<(Stmt, Span)>>,
     },
     // loop { ... }
-    Loop(Vec<Stmt>),
+    Loop(Vec<(Stmt, Span)>),
     // for i in 0..10 { ... }
     For {
         var:  String,
         from: Expr,
         to:   Expr,
-        body: Vec<Stmt>,
+        body: Vec<(Stmt, Span)>,
     },
     // break;
     Break,
     // free(x);
     Free(String),
+    // 블록 내부 인라인 앵커
+    InlineAnchor {
+        name:  String,
+        kind:  AnchorKind,
+        retry: Option<u32>,
+        body:  Vec<(Stmt, Span)>,
+    },
     // 표현식 구문 (함수 호출 등)
     ExprStmt(Expr),
 }
@@ -168,20 +213,20 @@ pub enum TopLevel {
         name:      String,
         kind:      AnchorKind,
         retry:     Option<u32>,
-        body:      Vec<Stmt>,
-        children:  Vec<TopLevel>,
+        body:      Vec<(Stmt, Span)>,
+        children:  Vec<(TopLevel, Span)>,
     },
     // function add(int a, int b) -> int { ... }
     Function {
         name:       String,
         params:     Vec<Param>,
         return_ty:  Option<Ty>,
-        body:       Vec<Stmt>,
+        body:       Vec<(Stmt, Span)>,
     },
 }
 
 // 프로그램 전체
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {
-    pub items: Vec<TopLevel>,
+    pub items: Vec<(TopLevel, Span)>,
 }

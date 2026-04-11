@@ -2,16 +2,38 @@ use crate::ast::*;
 
 pub struct Parser {
     tokens: Vec<Token>,
+    lines:  Vec<usize>,
+    cols:   Vec<usize>,
     pos:    usize,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+    pub fn new(spanned_tokens: Vec<(Token, usize, usize)>) -> Self {
+        let mut tokens = Vec::with_capacity(spanned_tokens.len());
+        let mut lines = Vec::with_capacity(spanned_tokens.len());
+        let mut cols = Vec::with_capacity(spanned_tokens.len());
+        for (tok, line, col) in spanned_tokens {
+            tokens.push(tok);
+            lines.push(line);
+            cols.push(col);
+        }
+        Parser { tokens, lines, cols, pos: 0 }
     }
 
     fn current(&self) -> &Token {
         self.tokens.get(self.pos).unwrap_or(&Token::EOF)
+    }
+
+    fn current_col(&self) -> usize {
+        self.cols.get(self.pos).copied().unwrap_or(0)
+    }
+
+    fn current_line(&self) -> usize {
+        self.lines.get(self.pos).copied().unwrap_or(0)
+    }
+
+    fn current_span(&self) -> Span {
+        Span { line: self.current_line(), col: self.current_col() }
     }
 
     fn advance(&mut self) -> &Token {
@@ -68,18 +90,96 @@ impl Parser {
         }
     }
 
-    // 표현식 파싱
+    // 표현식 파싱 (우선순위: or < and < 비교 < 덧뺄셈 < 곱나눗셈 < 단항 < primary)
     fn parse_expr(&mut self) -> Expr {
-        let left = self.parse_primary();
+        self.parse_or()
+    }
 
+    fn parse_or(&mut self) -> Expr {
+        let mut left = self.parse_and();
+        loop {
+            if self.current() != &Token::Or { break; }
+            self.advance();
+            let right = self.parse_and();
+            left = Expr::BinOp { left: Box::new(left), op: BinOpKind::Or, right: Box::new(right) };
+        }
+        left
+    }
+
+    fn parse_and(&mut self) -> Expr {
+        let mut left = self.parse_comparison();
+        loop {
+            if self.current() != &Token::And { break; }
+            self.advance();
+            let right = self.parse_comparison();
+            left = Expr::BinOp { left: Box::new(left), op: BinOpKind::And, right: Box::new(right) };
+        }
+        left
+    }
+
+    fn parse_comparison(&mut self) -> Expr {
+        let mut left = self.parse_additive();
+        loop {
+            let op = match self.current() {
+                Token::Lt   => BinOpKind::Lt,
+                Token::Gt   => BinOpKind::Gt,
+                Token::Le   => BinOpKind::Le,
+                Token::Ge   => BinOpKind::Ge,
+                Token::EqEq => BinOpKind::Eq,
+                Token::Neq  => BinOpKind::Neq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_additive();
+            left = Expr::BinOp { left: Box::new(left), op, right: Box::new(right) };
+        }
+        left
+    }
+
+    fn parse_additive(&mut self) -> Expr {
+        let mut left = self.parse_multiplicative();
+        loop {
+            let op = match self.current() {
+                Token::Plus  => BinOpKind::Add,
+                Token::Minus => BinOpKind::Sub,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_multiplicative();
+            left = Expr::BinOp { left: Box::new(left), op, right: Box::new(right) };
+        }
+        left
+    }
+
+    fn parse_multiplicative(&mut self) -> Expr {
+        let mut left = self.parse_unary();
+        loop {
+            let op = match self.current() {
+                Token::Star    => BinOpKind::Mul,
+                Token::Slash   => BinOpKind::Div,
+                Token::Percent => BinOpKind::Mod,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_unary();
+            left = Expr::BinOp { left: Box::new(left), op, right: Box::new(right) };
+        }
+        left
+    }
+
+    fn parse_unary(&mut self) -> Expr {
         match self.current() {
-            Token::Plus  => { self.advance(); Expr::BinOp { left: Box::new(left), op: BinOpKind::Add, right: Box::new(self.parse_expr()) } }
-            Token::Minus => { self.advance(); Expr::BinOp { left: Box::new(left), op: BinOpKind::Sub, right: Box::new(self.parse_expr()) } }
-            Token::Star  => { self.advance(); Expr::BinOp { left: Box::new(left), op: BinOpKind::Mul, right: Box::new(self.parse_expr()) } }
-            Token::Slash => { self.advance(); Expr::BinOp { left: Box::new(left), op: BinOpKind::Div, right: Box::new(self.parse_expr()) } }
-            Token::Lt    => { self.advance(); Expr::BinOp { left: Box::new(left), op: BinOpKind::Lt,  right: Box::new(self.parse_expr()) } }
-            Token::Gt    => { self.advance(); Expr::BinOp { left: Box::new(left), op: BinOpKind::Gt,  right: Box::new(self.parse_expr()) } }
-            _ => left,
+            Token::Minus => {
+                self.advance();
+                let expr = self.parse_unary();
+                Expr::UnaryOp { op: UnaryOpKind::Neg, expr: Box::new(expr) }
+            }
+            Token::Not => {
+                self.advance();
+                let expr = self.parse_unary();
+                Expr::UnaryOp { op: UnaryOpKind::Not, expr: Box::new(expr) }
+            }
+            _ => self.parse_primary(),
         }
     }
 
@@ -119,19 +219,20 @@ impl Parser {
     }
 
     // 구문 파싱
-    fn parse_stmt(&mut self) -> Stmt {
-        match self.current().clone() {
-            // Kill
+    fn parse_stmt(&mut self) -> (Stmt, Span) {
+        let span = self.current_span();
+        let stmt = match self.current().clone() {
+            // Kill — 표현식(문자열 연결 등) 허용
             Token::Kill => {
                 self.advance();
-                let msg = if let Token::StringLit(s) = self.current().clone() {
+                if self.current() == &Token::Semicolon {
                     self.advance();
-                    Some(s)
+                    Stmt::Kill(None)
                 } else {
-                    None
-                };
-                self.expect(&Token::Semicolon);
-                Stmt::Kill(msg)
+                    let e = self.parse_expr();
+                    self.expect(&Token::Semicolon);
+                    Stmt::Kill(Some(e))
+                }
             }
             // Exit
             Token::Exit => {
@@ -182,10 +283,15 @@ impl Parser {
                 self.expect(&Token::RBrace);
                 let else_body = if self.current() == &Token::Else {
                     self.advance();
-                    self.expect(&Token::LBrace);
-                    let b = self.parse_body();
-                    self.expect(&Token::RBrace);
-                    Some(b)
+                    if self.current() == &Token::If {
+                        // else if → 중첩 if로 변환
+                        Some(vec![self.parse_stmt()])
+                    } else {
+                        self.expect(&Token::LBrace);
+                        let b = self.parse_body();
+                        self.expect(&Token::RBrace);
+                        Some(b)
+                    }
                 } else {
                     None
                 };
@@ -233,7 +339,21 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                if self.current() == &Token::Eq {
+                // 복합 대입 연산자 (+=, -=, *=, /=, %=)
+                let compound_op = match self.current() {
+                    Token::PlusEq    => Some(BinOpKind::Add),
+                    Token::MinusEq   => Some(BinOpKind::Sub),
+                    Token::StarEq    => Some(BinOpKind::Mul),
+                    Token::SlashEq   => Some(BinOpKind::Div),
+                    Token::PercentEq => Some(BinOpKind::Mod),
+                    _ => None,
+                };
+                if let Some(op) = compound_op {
+                    self.advance();
+                    let value = self.parse_expr();
+                    self.expect(&Token::Semicolon);
+                    Stmt::CompoundAssign { name, op, value }
+                } else if self.current() == &Token::Eq {
                     self.advance();
                     let value = self.parse_expr();
                     self.expect(&Token::Semicolon);
@@ -253,29 +373,42 @@ impl Parser {
                 }
             }
             t => panic!("Unexpected token in statement: {:?}", t),
-        }
+        };
+        (stmt, span)
     }
 
-    fn parse_body(&mut self) -> Vec<Stmt> {
+    fn parse_body(&mut self) -> Vec<(Stmt, Span)> {
         let mut stmts = Vec::new();
         loop {
             match self.current() {
-                Token::RBrace | Token::EOF | Token::At => break,
+                Token::RBrace | Token::EOF => break,
+                Token::At => stmts.push(self.parse_inline_anchor()),
                 _ => stmts.push(self.parse_stmt()),
             }
         }
         stmts
     }
 
-    // 앵커 파싱 @이름(형태)
-    fn parse_anchor(&mut self) -> TopLevel {
-        self.expect(&Token::At);
-        let name = self.eat_ident();
+    // 앵커 종류 파싱 (공통 헬퍼)
+    fn parse_anchor_kind(&mut self) -> (AnchorKind, Option<u32>) {
+        // retry만 있는 경우: @name(retry(N))
+        // 또는 빈 앵커: @name()
+        if self.current() == &Token::RParen {
+            return (AnchorKind::Plain, None);
+        }
 
-        self.expect(&Token::LParen);
-
-        // 앵커 종류 파싱
         let kind_ident = self.eat_ident();
+
+        // retry가 kind 자리에 온 경우 → Plain + retry
+        if kind_ident == "retry" {
+            self.expect(&Token::LParen);
+            let n = if let Token::IntLit(n) = self.current().clone() {
+                self.advance(); n as u32
+            } else { panic!("Expected retry count") };
+            self.expect(&Token::RParen);
+            return (AnchorKind::Plain, Some(n));
+        }
+
         let kind = match kind_ident.as_str() {
             "main" => AnchorKind::Main,
             "event" => {
@@ -299,7 +432,6 @@ impl Parser {
             k => panic!("Unknown anchor kind: {}", k),
         };
 
-        // retry 파싱 (선택)
         let mut retry = None;
         if self.current() == &Token::Comma {
             self.advance();
@@ -314,30 +446,72 @@ impl Parser {
             }
         }
 
+        (kind, retry)
+    }
+
+    // 블록 내부 인라인 앵커 파싱 (들여쓰기 기반)
+    fn parse_inline_anchor(&mut self) -> (Stmt, Span) {
+        let span = self.current_span();
+        let anchor_col = self.current_col();
+        self.expect(&Token::At);
+        let name = self.eat_ident();
+        self.expect(&Token::LParen);
+        let (kind, retry) = self.parse_anchor_kind();
         self.expect(&Token::RParen);
 
-        // 본문 + 자식 앵커
+        let body = self.parse_indented_body(anchor_col);
+
+        (Stmt::InlineAnchor { name, kind, retry, body }, span)
+    }
+
+    // 들여쓰기 기반 본문 파싱: anchor_col보다 더 들여쓴 구문만 포함
+    fn parse_indented_body(&mut self, anchor_col: usize) -> Vec<(Stmt, Span)> {
+        let mut stmts = Vec::new();
+        loop {
+            match self.current() {
+                Token::RBrace | Token::EOF => break,
+                _ if self.current_col() <= anchor_col => break,
+                Token::At => stmts.push(self.parse_inline_anchor()),
+                _ => stmts.push(self.parse_stmt()),
+            }
+        }
+        stmts
+    }
+
+    // 최상위 앵커 파싱 @이름(형태) — 들여쓰기로 바디 범위 결정
+    fn parse_anchor(&mut self) -> (TopLevel, Span) {
+        let span = self.current_span();
+        let anchor_col = self.current_col();
+        self.expect(&Token::At);
+        let name = self.eat_ident();
+        self.expect(&Token::LParen);
+        let (kind, retry) = self.parse_anchor_kind();
+        self.expect(&Token::RParen);
+
+        // 본문 + 자식 앵커 (들여쓰기 기반)
         let mut body     = Vec::new();
         let mut children = Vec::new();
 
         loop {
+            if matches!(self.current(), Token::EOF) {
+                break;
+            }
+            if self.current_col() <= anchor_col {
+                break;
+            }
             match self.current() {
-                Token::EOF => break,
-                Token::At  => {
-                    // 다음 앵커가 자식인지 형제인지는 analyzer에서 판단
-                    // 여기선 일단 자식으로 파싱
-                    children.push(self.parse_anchor());
-                }
-                Token::Function => break, // 함수 선언은 최상위로
+                Token::At       => children.push(self.parse_anchor()),
+                Token::Function => break,
                 _ => body.push(self.parse_stmt()),
             }
         }
 
-        TopLevel::Anchor { name, kind, retry, body, children }
+        (TopLevel::Anchor { name, kind, retry, body, children }, span)
     }
 
     // 함수 파싱
-    fn parse_function(&mut self) -> TopLevel {
+    fn parse_function(&mut self) -> (TopLevel, Span) {
+        let span = self.current_span();
         self.expect(&Token::Function);
         let name = self.eat_ident();
         self.expect(&Token::LParen);
@@ -362,7 +536,7 @@ impl Parser {
         let body = self.parse_body();
         self.expect(&Token::RBrace);
 
-        TopLevel::Function { name, params, return_ty, body }
+        (TopLevel::Function { name, params, return_ty, body }, span)
     }
 
     // 전체 파싱

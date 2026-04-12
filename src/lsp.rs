@@ -247,24 +247,130 @@ fn compute_hover(text: &str, pos: Position) -> Option<Hover> {
 
 fn keyword_hover(w: &str) -> Option<String> {
     let s = match w {
-        "int"    => "**int** — 64-bit signed integer type",
-        "float"  => "**float** — 64-bit floating-point type",
-        "string" => "**string** — UTF-8 string type",
-        "bool"   => "**bool** — boolean type (`true` / `false`)",
-        "fn" | "function" => "**fn** — declare a function",
-        "vault"  => "**vault** — managed-memory declaration",
-        "yield"  => "**yield** — output a value (print)",
-        "kill"   => "**kill** — terminate the current anchor",
-        "exit"   => "**exit** — exit the program",
-        "return" => "**return** — return a value from a function",
-        "if"     => "**if** — conditional branch",
-        "else"   => "**else** — alternative branch",
-        "loop"   => "**loop** — infinite loop (`break` to exit)",
-        "for"    => "**for** — range-based loop\n\n```kyte\nfor i in 0..10 { … }\n```",
-        "break"  => "**break** — exit the innermost loop",
-        "true"   => "**true** — boolean literal",
-        "false"  => "**false** — boolean literal",
-        "free"   => "**free(name)** — release vault memory",
+        "int" => "\
+**int** — 64-bit signed integer type\n\n\
+```kyte\n\
+int x = 42;\n\
+int y = x + 10;\n\
+```",
+        "float" => "\
+**float** — 64-bit floating-point type\n\n\
+```kyte\n\
+float pi = 3.14;\n\
+float r = pi * 2.0;\n\
+```",
+        "string" => "\
+**string** — UTF-8 string type\n\n\
+```kyte\n\
+string name = \"world\";\n\
+yield \"Hello, \" + name;\n\
+```",
+        "bool" => "\
+**bool** — boolean type\n\n\
+```kyte\n\
+bool flag = true;\n\
+if flag { yield 1; }\n\
+```",
+        "fn" | "function" => "\
+**fn** — declare a function\n\n\
+```kyte\n\
+fn add(int a, int b) -> int {\n\
+    return a + b;\n\
+}\n\
+```",
+        "vault" => "\
+**vault** — managed-memory declaration\n\n\
+```kyte\n\
+vault int buffer = 1024;\n\
+// ... use buffer ...\n\
+free(buffer);\n\
+```",
+        "yield" => "\
+**yield** — output a value (print)\n\n\
+```kyte\n\
+yield 42;\n\
+yield \"hello\";\n\
+yield x + y;\n\
+```",
+        "kill" => "\
+**kill** — terminate the current anchor\n\n\
+```kyte\n\
+@worker(thread)\n\
+    // ... work ...\n\
+    kill;\n\
+```",
+        "exit" => "\
+**exit** — exit the entire program\n\n\
+```kyte\n\
+if error {\n\
+    exit;\n\
+}\n\
+```",
+        "return" => "\
+**return** — return a value from a function\n\n\
+```kyte\n\
+fn double(int n) -> int {\n\
+    return n * 2;\n\
+}\n\
+```",
+        "if" => "\
+**if** — conditional branch\n\n\
+```kyte\n\
+if x > 10 {\n\
+    yield \"big\";\n\
+} else {\n\
+    yield \"small\";\n\
+}\n\
+```",
+        "else" => "\
+**else** — alternative branch\n\n\
+```kyte\n\
+if x > 0 {\n\
+    yield \"positive\";\n\
+} else {\n\
+    yield \"non-positive\";\n\
+}\n\
+```",
+        "loop" => "\
+**loop** — infinite loop (use `break` to exit)\n\n\
+```kyte\n\
+int i = 0;\n\
+loop {\n\
+    if i >= 10 { break; }\n\
+    yield i;\n\
+    i += 1;\n\
+}\n\
+```",
+        "for" => "\
+**for** — range-based loop\n\n\
+```kyte\n\
+for i in 0..5 {\n\
+    yield i;  // 0, 1, 2, 3, 4\n\
+}\n\
+```",
+        "break" => "\
+**break** — exit the innermost loop\n\n\
+```kyte\n\
+loop {\n\
+    if done { break; }\n\
+}\n\
+```",
+        "true" => "\
+**true** — boolean literal\n\n\
+```kyte\n\
+bool active = true;\n\
+```",
+        "false" => "\
+**false** — boolean literal\n\n\
+```kyte\n\
+bool done = false;\n\
+```",
+        "free" => "\
+**free(name)** — release vault memory\n\n\
+```kyte\n\
+vault int buf = 512;\n\
+free(buf);\n\
+```",
         _ => return None,
     };
     Some(s.into())
@@ -278,9 +384,9 @@ fn symbol_hover(text: &str, word: &str) -> Option<String> {
         let mut par = Parser::new(tokens);
         let ast = par.parse();
 
-        for (item, _) in &ast.items {
-            if let TopLevel::Function { name, params, return_ty, .. } = item {
-                if name == word {
+        for (item, span) in &ast.items {
+            match item {
+                TopLevel::Function { name, params, return_ty, .. } if name == word => {
                     let ps: Vec<String> = params
                         .iter()
                         .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
@@ -289,13 +395,129 @@ fn symbol_hover(text: &str, word: &str) -> Option<String> {
                         .as_ref()
                         .map(|t| format!(" -> {}", ty_str(t)))
                         .unwrap_or_default();
-                    return Some(format!("```kyte\nfn {}({}){}\n```", name, ps.join(", "), ret));
+
+                    eprintln!("[kyte-lsp] hover: fn={}, span.line={}", name, span.line);
+                    let doc = extract_doc_comment(&src, span.line);
+                    eprintln!("[kyte-lsp] doc comment = {:?}", doc);
+                    let sig = format!("```kyte\nfn {}({}){}\n```", name, ps.join(", "), ret);
+                    let hover_md = format_with_doc(&sig, &doc);
+                    eprintln!("[kyte-lsp] hover markdown:\n{}", hover_md);
+                    return Some(hover_md);
                 }
+                TopLevel::Anchor { name, kind, .. } if name == word => {
+                    let doc = extract_doc_comment(&src, span.line);
+                    let sig = format!("```kyte\n@{}({:?})\n```", name, kind);
+                    return Some(format_with_doc(&sig, &doc));
+                }
+                // 중첩 앵커 탐색
+                TopLevel::Anchor { children, .. } => {
+                    if let Some(result) = search_children(&src, children, word) {
+                        return Some(result);
+                    }
+                }
+                _ => {}
             }
         }
         None
     }));
     r.ok().flatten()
+}
+
+fn search_children(src: &str, children: &[(TopLevel, crate::ast::Span)], word: &str) -> Option<String> {
+    for (item, span) in children {
+        if let TopLevel::Anchor { name, kind, children: nested, .. } = item {
+            if name == word {
+                let doc = extract_doc_comment(src, span.line);
+                let sig = format!("```kyte\n@{}({:?})\n```", name, kind);
+                return Some(format_with_doc(&sig, &doc));
+            }
+            if let Some(result) = search_children(src, nested, word) {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
+fn format_with_doc(sig: &str, doc: &str) -> String {
+    if doc.is_empty() {
+        sig.to_string()
+    } else {
+        // doc 안의 ```kyte 를 ``` 로 통일 (VS Code 호버에서 인식 보장)
+        let doc_normalized = doc.replace("```kyte", "```");
+        format!("{}\n\n---\n\n{}", sig, doc_normalized)
+    }
+}
+
+/// `fn` 선언(1-indexed `fn_line`) 바로 위에 있는 연속된 `///` 주석을 추출한다.
+/// 들여쓰기(4칸+)된 줄은 자동으로 코드 블록으로 감싼다.
+fn extract_doc_comment(src: &str, fn_line: usize) -> String {
+    let lines: Vec<&str> = src.lines().collect();
+    if fn_line == 0 || fn_line > lines.len() {
+        return String::new();
+    }
+    // fn_line은 1-indexed → 배열에선 fn_line-1.  그 바로 위부터 위로 스캔
+    let mut doc_lines: Vec<&str> = Vec::new();
+    let mut idx = fn_line as isize - 2; // 바로 윗줄(0-indexed)
+    while idx >= 0 {
+        let trimmed = lines[idx as usize].trim();
+        if let Some(rest) = trimmed.strip_prefix("///") {
+            doc_lines.push(rest.strip_prefix(' ').unwrap_or(rest));
+            idx -= 1;
+        } else {
+            break;
+        }
+    }
+    doc_lines.reverse();
+
+    // 들여쓰기(4칸+)된 줄을 자동으로 ```kyte 코드 블록으로 감싸기
+    let mut result = String::new();
+    let mut in_code = false;
+    let mut in_user_fence = false;
+
+    for line in &doc_lines {
+        // 사용자가 직접 ``` 를 쓴 경우 그대로 통과
+        if line.trim().starts_with("```") {
+            in_user_fence = !in_user_fence;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+        if in_user_fence {
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        let is_code_line = line.starts_with("    ") || line.starts_with('\t');
+        if is_code_line && !in_code {
+            result.push_str("```\n");
+            in_code = true;
+        } else if !is_code_line && in_code {
+            result.push_str("```\n");
+            in_code = false;
+        }
+
+        if in_code {
+            // 들여쓰기 4칸 제거
+            let stripped = if line.starts_with("    ") {
+                &line[4..]
+            } else if line.starts_with('\t') {
+                &line[1..]
+            } else {
+                line
+            };
+            result.push_str(stripped);
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    if in_code {
+        result.push_str("```\n");
+    }
+
+    result.trim_end().to_string()
 }
 
 fn ty_str(ty: &Ty) -> &'static str {

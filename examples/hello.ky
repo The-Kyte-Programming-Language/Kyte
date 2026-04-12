@@ -6,6 +6,11 @@ fn square(int n) -> int {
     return n * n;
 }
 
+/// 팩토리얼을 계산합니다.
+///
+/// ```kyte
+/// int f = factorial(5);  // 120
+/// ```
 fn factorial(int n) -> int {
     if n <= 1 {
         return 1;

@@ -56,6 +56,7 @@ fn main() {
         Some("test") => {
             print_banner();
             run_tests();
+            run_feature_tests();
             safe_exit(0);
         }
 
@@ -90,7 +91,7 @@ fn run_tests() {
     run_test("1. Error Detection", r#"
 fn add(int a, int b) -> int { return a + b; }
 fn add(int x) -> int { return x; }
-@main(main)
+@main(main) {
     int x = 10;
     int x = 20;
     int y = "hello";
@@ -100,31 +101,35 @@ fn add(int x) -> int { return x; }
     int q = add(1);
     ghost(42);
     if x { int a = 1; }
+}
 "#);
 
     run_test("2. Clean Code (expect 0 errors)", r#"
 fn square(int n) -> int { return n * n; }
 fn greet(string name) -> string { return "Hello, " + name; }
 fn add(int a, int b) -> int { return a + b; }
-@app(main)
+@app(main) {
     int x = 10;
     int y = 20;
     int sum = add(x, y);
     bool flag = x > y;
     if flag { int z = 100; }
     for i in 0..5 { int temp = i * 2; }
+}
 "#);
 
     run_test("3. Anchor Scope Isolation", r#"
-@outer(main)
+@outer(main) {
     int a = 10;
-    @inner(thread)
+    @inner(thread) {
         int b = 20;
+    }
     a = b;
+}
 "#);
 
     run_test("4. Type System", r#"
-@main(main)
+@main(main) {
     int a = 10;
     float b = 3.14;
     string c = "hello";
@@ -134,62 +139,190 @@ fn add(int a, int b) -> int { return a + b; }
     string g = c - a;
     int h = -c;
     bool i = !a;
+}
 "#);
 
     run_test("5. Function Signature Validation", r#"
 fn calc(int x, int y, bool flag) -> int { return x + y; }
-@main(main)
+@main(main) {
     int r1 = calc(1, 2, true);
     int r2 = calc(1, 2);
     int r3 = calc(1, 2, 3);
     int r4 = calc("a", "b", true);
+}
 "#);
 
     run_test("6. Compound Assign + Vault", r#"
-@main(main)
+@main(main) {
     int x = 10;
     x += 5; x -= 2; x *= 3; x /= 2; x %= 7;
     x += 3.14;
-    vault int buf = 1024;
-    loop { vault int temp = 256; }
-    loop { vault int safe = 128; free(safe); }
+    Vault int buf = 1024;
+    loop { Vault int temp = 256; }
+    loop { Vault int safe = 128; free(safe); }
+}
 "#);
 
     run_test("7. Return Type + Control Flow", r#"
 fn bad_return(int x) -> int { return "oops"; }
 fn no_return(int x) -> float { return; }
 fn ok(int x) -> bool { return x > 0; }
-@main(main)
+@main(main) {
     int a = ok(5);
+}
 "#);
 
     run_test("8. Nested Anchor Scope", r#"
-@root(main)
+@root(main) {
     int shared = 42;
-    @child1(thread)
+    @child1(thread) {
         int local1 = shared + 1;
-        @grandchild(thread)
+        @grandchild(thread) {
             int deep = local1 + shared;
-    @child2(thread)
+        }
+    }
+    @child2(thread) {
         int local2 = local1;
         int ok2 = shared;
+    }
+}
 "#);
 
     println!("  \x1b[1;36m━━━ 9. Codegen (LLVM IR) ━━━\x1b[0m");
     compile_source(r#"
 fn add(int a, int b) -> int { return a + b; }
 fn square(int n) -> int { return n * n; }
-@app(main)
+@app(main) {
     int x = 10;
     int y = 20;
     int sum = add(x, y);
     int sq = square(sum);
-    yield sum;
-    yield sq;
+    print(sum);
+    print(sq);
     bool flag = x > y;
-    if flag { yield 1; } else { yield 0; }
-    for i in 0..5 { yield i; }
+    if flag { print(1); } else { print(0); }
+    for i in 0..5 { print(i); }
+}
 "#, "<inline>");
+}
+
+// ─────────────────────────────────────────
+//  추가 기능 통합 테스트
+// ─────────────────────────────────────────
+
+fn run_feature_tests() {
+    // print 테스트
+    run_test("F1. print statement", r#"
+@app(main) {
+    print(42);
+    print("hello");
+    print(3.14);
+    print(true);
+}
+"#);
+
+    // string concat 테스트
+    run_test("F2. string concat", r#"
+@app(main) {
+    string a = "Hello";
+    string b = " World";
+    string c = a + b;
+    print(c);
+}
+"#);
+
+    // Vault + free 테스트
+    run_test("F3. Vault heap allocation", r#"
+@app(main) {
+    Vault int x = 42;
+    print(x);
+    free(x);
+}
+"#);
+
+    // Kill → anchor recovery 테스트
+    run_test("F4. Kill recovery", r#"
+@app(main) {
+    int x = 10;
+    @handler() {
+        Kill "error in handler";
+    }
+    print(x);
+}
+"#);
+
+    // yield → data transfer 테스트
+    run_test("F5. yield in anchor", r#"
+@app(main) {
+    int a = 100;
+    @producer() {
+        yield a;
+    }
+    print(a);
+}
+"#);
+
+    // 복합 테스트
+    run_test("F6. Combined features", r#"
+fn greet(string name) -> string { return "Hello, " + name; }
+@app(main) {
+    string msg = greet("Kyte");
+    print(msg);
+    Vault int buf = 1024;
+    print(buf);
+    free(buf);
+    @safe() {
+        Kill "recovered!";
+    }
+    print("done");
+}
+"#);
+
+    // while 루프 테스트
+    run_test("F7. while loop", r#"
+@app(main) {
+    int i = 0;
+    while i < 5 {
+        print(i);
+        i += 1;
+    }
+}
+"#);
+
+    // as 타입 캐스팅 테스트
+    run_test("F8. type casting", r#"
+@app(main) {
+    int x = 42;
+    float y = x as float;
+    print(y);
+    float pi = 3.14;
+    int rounded = pi as int;
+    print(rounded);
+}
+"#);
+
+    // string + int 자동 변환 테스트
+    run_test("F9. string + int concat", r#"
+@app(main) {
+    string msg = "score: " + 100;
+    print(msg);
+    string msg2 = "pi = " + 3.14;
+    print(msg2);
+}
+"#);
+
+    // string 비교 테스트
+    run_test("F10. string comparison", r#"
+@app(main) {
+    string a = "hello";
+    string b = "hello";
+    string c = "world";
+    bool same = a == b;
+    bool diff = a != c;
+    print(same);
+    print(diff);
+}
+"#);
 }
 
 // ─────────────────────────────────────────

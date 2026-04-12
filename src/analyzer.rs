@@ -104,6 +104,7 @@ pub struct Analyzer {
     functions:    HashMap<String, FnSig>,
     source_lines: Vec<String>,
     current_span: Span,
+    in_anchor:    bool,
 }
 
 impl Analyzer {
@@ -136,6 +137,7 @@ impl Analyzer {
             functions: HashMap::new(),
             source_lines,
             current_span: Span { line: 0, col: 0 },
+            in_anchor: false,
         };
 
         // 0: main 앵커 존재/중복 검사 (top-level)
@@ -204,6 +206,8 @@ impl Analyzer {
 
     fn check_anchor(&mut self, anchor: &TopLevel, _anchor_span: Span, inherited: &HashMap<String, VarInfo>) {
         if let TopLevel::Anchor { body, children, .. } = anchor {
+            let saved = self.in_anchor;
+            self.in_anchor = true;
             let mut scope = inherited.clone();
             for (stmt, sp) in body {
                 self.current_span = *sp;
@@ -213,6 +217,7 @@ impl Analyzer {
             for (child, child_span) in children {
                 self.check_anchor(child, *child_span, &scope);
             }
+            self.in_anchor = saved;
         }
     }
 
@@ -352,7 +357,17 @@ impl Analyzer {
             }
             Stmt::Kill(Some(e)) => { self.infer_expr(e, scope); }
             Stmt::Kill(None) | Stmt::Exit | Stmt::Break => {}
-            Stmt::Yield(e) => { self.infer_expr(e, scope); }
+            Stmt::Yield(e) => {
+                if !self.in_anchor {
+                    self.err("E020",
+                        "'yield' can only be used inside an anchor".to_string(),
+                        "Move this yield into an @anchor() { ... } block".to_string());
+                }
+                self.infer_expr(e, scope);
+            }
+            Stmt::Print(args) => {
+                for a in args { self.infer_expr(a, scope); }
+            }
             Stmt::Return(Some(e)) => {
                 let val_ty = self.infer_expr(e, scope);
                 if let (Some(expected), Some(got)) = (return_ty, &val_ty) {
@@ -412,6 +427,32 @@ impl Analyzer {
                     self.collect_decl(s, &mut loop_scope);
                 }
             }
+            Stmt::While { cond, body } => {
+                let cond_ty = self.infer_expr(cond, scope);
+                if let Some(ct) = &cond_ty {
+                    if *ct != Ty::Bool {
+                        self.err("E006",
+                            format!("While condition must be bool, got {}", ty_name(ct)),
+                            "Use a comparison (e.g. x > 0) or a bool variable".into());
+                    }
+                }
+                for (s, _) in body {
+                    if let Stmt::VaultDecl { name, .. } = s {
+                        let has_free = body.iter().any(|(s2, _)| matches!(s2, Stmt::Free(n) if n == name));
+                        if !has_free {
+                            self.err("E017",
+                                format!("Vault '{}' allocated in loop without explicit free", name),
+                                format!("Add free({}) before the loop ends", name));
+                        }
+                    }
+                }
+                let mut while_scope = scope.clone();
+                for (s, sp) in body {
+                    self.current_span = *sp;
+                    self.check_stmt_scoped(s, &while_scope, return_ty);
+                    self.collect_decl(s, &mut while_scope);
+                }
+            }
             Stmt::For { from, to, body, var, .. } => {
                 self.infer_expr(from, scope);
                 self.infer_expr(to, scope);
@@ -441,12 +482,15 @@ impl Analyzer {
                 }
             }
             Stmt::InlineAnchor { body, .. } => {
+                let saved = self.in_anchor;
+                self.in_anchor = true;
                 let mut inner_scope = scope.clone();
                 for (s, sp) in body {
                     self.current_span = *sp;
                     self.check_stmt_scoped(s, &inner_scope, return_ty);
                     self.collect_decl(s, &mut inner_scope);
                 }
+                self.in_anchor = saved;
             }
             Stmt::ExprStmt(e) => { self.infer_expr(e, scope); }
         }
@@ -505,7 +549,23 @@ impl Analyzer {
                     | BinOpKind::Div | BinOpKind::Mod => {
                         if matches!(op, BinOpKind::Add) {
                             if matches!((&lt, &rt), (Some(Ty::String), _) | (_, Some(Ty::String))) {
+                                // string + non-string → auto-concat (codegen handles conversion)
                                 return Some(Ty::String);
+                            }
+                        }
+                        // string - * / % → error
+                        if let (Some(ref l), Some(ref _r)) = (&lt, &rt) {
+                            if *l == Ty::String {
+                                self.err("E008",
+                                    format!("Cannot use '{}' on string type", match op {
+                                        BinOpKind::Sub => "-",
+                                        BinOpKind::Mul => "*",
+                                        BinOpKind::Div => "/",
+                                        BinOpKind::Mod => "%",
+                                        _ => "?",
+                                    }),
+                                    "Only '+' is allowed for string concatenation".into());
+                                return lt;
                             }
                         }
                         if let (Some(ref l), Some(ref r)) = (&lt, &rt) {
@@ -643,6 +703,27 @@ impl Analyzer {
                     }
                     None
                 }
+            }
+
+            Expr::Cast { expr, ty: target_ty } => {
+                let src_ty = self.infer_expr(expr, scope);
+                if let Some(ref st) = src_ty {
+                    let valid = match (st, target_ty) {
+                        // numeric → numeric
+                        (s, t) if is_numeric_ty(s) && is_numeric_ty(t) => true,
+                        // bool → int
+                        (Ty::Bool, t) if is_integer_ty(t) => true,
+                        // int → bool
+                        (s, Ty::Bool) if is_integer_ty(s) => true,
+                        _ => false,
+                    };
+                    if !valid {
+                        self.err("E021",
+                            format!("Cannot cast {} to {}", ty_name(st), ty_name(target_ty)),
+                            "Only numeric type conversions are allowed with 'as'".into());
+                    }
+                }
+                Some(target_ty.clone())
             }
         }
     }

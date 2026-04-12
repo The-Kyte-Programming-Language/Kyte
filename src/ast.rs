@@ -2,6 +2,7 @@
 pub enum Token {
     // 앵커
     At,           // @
+    Hash,         // #
 
     // 키워드
     Main,         // main
@@ -20,6 +21,9 @@ pub enum Token {
     True,         // true
     False,        // false
     Free,         // free
+    Print,        // print
+    While,        // while
+    As,           // as
 
     // 타입
     Int,          // int
@@ -141,6 +145,11 @@ pub enum Expr {
         array: Box<Expr>,
         index: Box<Expr>,
     },
+    // expr as ty
+    Cast {
+        expr: Box<Expr>,
+        ty:   Ty,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -204,6 +213,11 @@ pub enum Stmt {
     },
     // loop { ... }
     Loop(Vec<(Stmt, Span)>),
+    // while cond { ... }
+    While {
+        cond: Expr,
+        body: Vec<(Stmt, Span)>,
+    },
     // for i in 0..10 { ... }
     For {
         var:  String,
@@ -215,6 +229,8 @@ pub enum Stmt {
     Break,
     // free(x);
     Free(String),
+    // print(expr, ...);
+    Print(Vec<Expr>),
     // 블록 내부 인라인 앵커
     InlineAnchor {
         name:  String,

@@ -325,10 +325,10 @@ fn add(int a, int b) -> int {\n\
     return a + b;\n\
 }\n\
 ```",
-        "vault" => "\
-**vault** — managed-memory declaration\n\n\
+        "vault" | "Vault" => "\
+**Vault** — managed-memory declaration (heap-allocated)\n\n\
 ```kyte\n\
-vault int buffer = 1024;\n\
+Vault int buffer = 1024;\n\
 // ... use buffer ...\n\
 free(buffer);\n\
 ```",
@@ -339,18 +339,18 @@ yield 42;\n\
 yield \"hello\";\n\
 yield x + y;\n\
 ```",
-        "kill" => "\
-**kill** — terminate the current anchor\n\n\
+        "kill" | "Kill" => "\
+**Kill** — terminate the current anchor with recovery\n\n\
 ```kyte\n\
-@worker(thread)\n\
-    // ... work ...\n\
-    kill;\n\
+@handler() {\n\
+    Kill \"error occurred\";\n\
+}\n\
 ```",
-        "exit" => "\
-**exit** — exit the entire program\n\n\
+        "exit" | "Exit" => "\
+**Exit** — exit the entire program\n\n\
 ```kyte\n\
 if error {\n\
-    exit;\n\
+    Exit;\n\
 }\n\
 ```",
         "return" => "\
@@ -384,7 +384,15 @@ if x > 0 {\n\
 int i = 0;\n\
 loop {\n\
     if i >= 10 { break; }\n\
-    yield i;\n\
+    i += 1;\n\
+}\n\
+```",
+        "while" => "\
+**while** — conditional loop\n\n\
+```kyte\n\
+int i = 0;\n\
+while i < 10 {\n\
+    print(i);\n\
     i += 1;\n\
 }\n\
 ```",
@@ -411,6 +419,12 @@ bool active = true;\n\
 **false** — boolean literal\n\n\
 ```kyte\n\
 bool done = false;\n\
+```",
+        "as" => "\
+**as** — type casting\n\n\
+```kyte\n\
+int x = 42;\n\
+float y = x as float;\n\
 ```",
         "free" => "\
 **free(name)** — release vault memory\n\n\
@@ -654,13 +668,19 @@ const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
     ("else",   CompletionItemKind::KEYWORD,        "Alternative branch"),
     ("for",    CompletionItemKind::KEYWORD,        "Range loop"),
     ("loop",   CompletionItemKind::KEYWORD,        "Infinite loop"),
+    ("while",  CompletionItemKind::KEYWORD,        "Conditional loop"),
     ("break",  CompletionItemKind::KEYWORD,        "Exit loop"),
     ("return", CompletionItemKind::KEYWORD,        "Return value"),
     ("yield",  CompletionItemKind::KEYWORD,        "Output value"),
-    ("vault",  CompletionItemKind::KEYWORD,        "Managed memory"),
+    ("vault",  CompletionItemKind::KEYWORD,        "Managed memory (Vault)"),
+    ("Vault",  CompletionItemKind::KEYWORD,        "Managed memory"),
     ("free",   CompletionItemKind::KEYWORD,        "Release memory"),
-    ("kill",   CompletionItemKind::KEYWORD,        "Terminate anchor"),
-    ("exit",   CompletionItemKind::KEYWORD,        "Exit program"),
+    ("print",  CompletionItemKind::FUNCTION,       "Print values to stdout"),
+    ("as",     CompletionItemKind::KEYWORD,        "Type casting"),
+    ("kill",   CompletionItemKind::KEYWORD,        "Terminate anchor (Kill)"),
+    ("Kill",   CompletionItemKind::KEYWORD,        "Terminate anchor"),
+    ("exit",   CompletionItemKind::KEYWORD,        "Exit program (Exit)"),
+    ("Exit",   CompletionItemKind::KEYWORD,        "Exit program"),
     ("true",   CompletionItemKind::CONSTANT,       "Boolean true"),
     ("false",  CompletionItemKind::CONSTANT,       "Boolean false"),
 ];

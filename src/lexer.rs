@@ -114,21 +114,24 @@ impl Lexer {
         // 키워드 판별
         match s.as_str() {
             "main"     => Token::Main,
-            "fn" | "function" => Token::Function,
-            "Vault" | "vault" => Token::Vault,
-            "Kill"  | "kill"  => Token::Kill,
-            "Exit"  | "exit"  => Token::Exit,
+            "fn"       => Token::Function,
+            "Vault"    => Token::Vault,
+            "Kill"     => Token::Kill,
+            "Exit"     => Token::Exit,
             "yield"    => Token::Yield,
             "return"   => Token::Return,
             "if"       => Token::If,
             "else"     => Token::Else,
             "loop"     => Token::Loop,
+            "while"    => Token::While,
             "for"      => Token::For,
             "in"       => Token::In,
             "break"    => Token::Break,
             "true"     => Token::True,
             "false"    => Token::False,
             "free"     => Token::Free,
+            "print"    => Token::Print,
+            "as"       => Token::As,
             "int"      => Token::Int,
             "float"    => Token::Float,
             "string"   => Token::String,
@@ -157,6 +160,7 @@ impl Lexer {
                 Some(ch) => {
                     let tok = match ch {
                         '@' => { self.advance(); Token::At }
+                        '#' => { self.advance(); Token::Hash }
                         '(' => { self.advance(); Token::LParen }
                         ')' => { self.advance(); Token::RParen }
                         '{' => { self.advance(); Token::LBrace }

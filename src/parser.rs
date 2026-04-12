@@ -44,6 +44,35 @@ impl Parser {
         tok
     }
 
+    fn skip_decorator(&mut self) {
+        self.expect(&Token::Hash);
+        let _name = self.eat_ident();
+        if self.current() == &Token::LParen {
+            self.advance();
+            let mut depth = 1usize;
+            while depth > 0 {
+                match self.current() {
+                    Token::LParen => {
+                        depth += 1;
+                        self.advance();
+                    }
+                    Token::RParen => {
+                        depth -= 1;
+                        self.advance();
+                    }
+                    Token::EOF => panic!(
+                        "Unclosed decorator arguments at line {}:{}",
+                        self.current_line(),
+                        self.current_col()
+                    ),
+                    _ => {
+                        self.advance();
+                    }
+                }
+            }
+        }
+    }
+
     fn expect(&mut self, expected: &Token) {
         if self.current() == expected {
             self.advance();
@@ -77,6 +106,10 @@ impl Parser {
             Token::Break    => { self.advance(); "break".to_string() }
             Token::True     => { self.advance(); "true".to_string() }
             Token::False    => { self.advance(); "false".to_string() }
+            Token::Free    => { self.advance(); "free".to_string() }
+            Token::Print   => { self.advance(); "print".to_string() }
+            Token::While   => { self.advance(); "while".to_string() }
+            Token::As      => { self.advance(); "as".to_string() }
             Token::Int      => { self.advance(); "int".to_string() }
             Token::Float    => { self.advance(); "float".to_string() }
             Token::String   => { self.advance(); "string".to_string() }
@@ -272,12 +305,22 @@ impl Parser {
                 self.current_col()
             ),
         };
-        // 후위 인덱스 접근: expr[index]
-        while self.current() == &Token::LBracket {
-            self.advance();
-            let index = self.parse_expr();
-            self.expect(&Token::RBracket);
-            expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+        // 후위: 인덱스 접근 expr[index], 타입 캐스팅 expr as ty
+        loop {
+            match self.current() {
+                Token::LBracket => {
+                    self.advance();
+                    let index = self.parse_expr();
+                    self.expect(&Token::RBracket);
+                    expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+                }
+                Token::As => {
+                    self.advance();
+                    let ty = self.parse_ty();
+                    expr = Expr::Cast { expr: Box::new(expr), ty };
+                }
+                _ => break,
+            }
         }
         expr
     }
@@ -338,6 +381,19 @@ impl Parser {
                 self.expect(&Token::Semicolon);
                 Stmt::Free(name)
             }
+            // print(expr, ...)
+            Token::Print => {
+                self.advance();
+                self.expect(&Token::LParen);
+                let mut args = Vec::new();
+                while self.current() != &Token::RParen {
+                    args.push(self.parse_expr());
+                    if self.current() == &Token::Comma { self.advance(); }
+                }
+                self.expect(&Token::RParen);
+                self.expect(&Token::Semicolon);
+                Stmt::Print(args)
+            }
             // if
             Token::If => {
                 self.advance();
@@ -368,6 +424,15 @@ impl Parser {
                 let body = self.parse_body();
                 self.expect(&Token::RBrace);
                 Stmt::Loop(body)
+            }
+            // while
+            Token::While => {
+                self.advance();
+                let cond = self.parse_expr();
+                self.expect(&Token::LBrace);
+                let body = self.parse_body();
+                self.expect(&Token::RBrace);
+                Stmt::While { cond, body }
             }
             // for
             Token::For => {
@@ -469,6 +534,7 @@ impl Parser {
         loop {
             match self.current() {
                 Token::RBrace | Token::EOF => break,
+                Token::Hash => self.skip_decorator(),
                 Token::At => stmts.push(self.parse_inline_anchor()),
                 _ => stmts.push(self.parse_stmt()),
             }
@@ -502,62 +568,70 @@ impl Parser {
         }
     }
 
-    // 블록 내부 인라인 앵커 파싱 (들여쓰기 기반)
+    // 블록 내부 인라인 앵커 파싱 (중괄호 필수)
     fn parse_inline_anchor(&mut self) -> (Stmt, Span) {
         let span = self.current_span();
-        let anchor_col = self.current_col();
         self.expect(&Token::At);
         let name = self.eat_ident();
         self.expect(&Token::LParen);
         let kind = self.parse_anchor_kind();
         self.expect(&Token::RParen);
 
-        let body = self.parse_indented_body(anchor_col);
+        self.expect(&Token::LBrace);
+        let body = self.parse_body();
+        self.expect(&Token::RBrace);
 
         (Stmt::InlineAnchor { name, kind, body }, span)
     }
 
-    // 들여쓰기 기반 본문 파싱: anchor_col보다 더 들여쓴 구문만 포함
-    fn parse_indented_body(&mut self, anchor_col: usize) -> Vec<(Stmt, Span)> {
-        let mut stmts = Vec::new();
-        loop {
-            match self.current() {
-                Token::RBrace | Token::EOF => break,
-                _ if self.current_col() <= anchor_col => break,
-                Token::At => stmts.push(self.parse_inline_anchor()),
-                _ => stmts.push(self.parse_stmt()),
-            }
-        }
-        stmts
-    }
-
-    // 최상위 앵커 파싱 @이름(형태) — 들여쓰기로 바디 범위 결정
+    // 최상위 앵커 파싱 @이름(형태) — 중괄호 필수
     fn parse_anchor(&mut self) -> (TopLevel, Span) {
         let span = self.current_span();
-        let anchor_col = self.current_col();
         self.expect(&Token::At);
         let name = self.eat_ident();
         self.expect(&Token::LParen);
         let kind = self.parse_anchor_kind();
         self.expect(&Token::RParen);
 
-        // 본문 + 자식 앵커 (들여쓰기 기반)
+        self.expect(&Token::LBrace);
+        // 본문 + 자식 앵커
         let mut body     = Vec::new();
         let mut children = Vec::new();
 
         loop {
-            if matches!(self.current(), Token::EOF) {
-                break;
-            }
-            if self.current_col() <= anchor_col {
-                break;
-            }
             match self.current() {
-                Token::At       => children.push(self.parse_anchor()),
-                Token::Function => break,
+                Token::RBrace | Token::EOF => break,
+                Token::Hash => self.skip_decorator(),
+                Token::At   => children.push(self.parse_child_anchor()),
                 _ => body.push(self.parse_stmt()),
             }
         }
+        self.expect(&Token::RBrace);
+
+        (TopLevel::Anchor { name, kind, body, children }, span)
+    }
+
+    // 자식 앵커 파싱 (인라인과 동일하지만 TopLevel 반환)
+    fn parse_child_anchor(&mut self) -> (TopLevel, Span) {
+        let span = self.current_span();
+        self.expect(&Token::At);
+        let name = self.eat_ident();
+        self.expect(&Token::LParen);
+        let kind = self.parse_anchor_kind();
+        self.expect(&Token::RParen);
+
+        self.expect(&Token::LBrace);
+        let mut body     = Vec::new();
+        let mut children = Vec::new();
+        loop {
+            match self.current() {
+                Token::RBrace | Token::EOF => break,
+                Token::Hash => self.skip_decorator(),
+                Token::At   => children.push(self.parse_child_anchor()),
+                _ => body.push(self.parse_stmt()),
+            }
+        }
+        self.expect(&Token::RBrace);
 
         (TopLevel::Anchor { name, kind, body, children }, span)
     }
@@ -598,6 +672,7 @@ impl Parser {
         loop {
             match self.current() {
                 Token::EOF      => break,
+                Token::Hash     => self.skip_decorator(),
                 Token::At       => items.push(self.parse_anchor()),
                 Token::Function => items.push(self.parse_function()),
                 t => panic!(

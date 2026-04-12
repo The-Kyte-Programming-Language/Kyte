@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   LLVM_VERSION: "21"
@@ -41,8 +44,11 @@ jobs:
       - name: Install LLVM (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${{ env.LLVM_VERSION }} main" \
+          sudo apt-get update
+          sudo apt-get install -y curl gnupg ca-certificates lsb-release
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${{ env.LLVM_VERSION }} main" \
             | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
           sudo apt-get install -y llvm-${{ env.LLVM_VERSION }}-dev libpolly-${{ env.LLVM_VERSION }}-dev clang-${{ env.LLVM_VERSION }}
@@ -67,14 +73,12 @@ jobs:
 
       - name: Clippy lint
         run: cargo clippy -- -D warnings
-        continue-on-error: true
 
       - name: Build
         run: cargo build --release
 
       - name: Run built-in tests
         run: cargo run --release -- test
-        continue-on-error: true
 
       # ── VS Code 확장 ──
       - name: Setup Node.js

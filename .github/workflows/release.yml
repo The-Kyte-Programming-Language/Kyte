@@ -12,8 +12,43 @@ env:
   LLVM_VERSION: "21"
 
 jobs:
+  quality-gate:
+    name: Release Quality Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install LLVM (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl gnupg ca-certificates lsb-release
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${{ env.LLVM_VERSION }} main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y llvm-${{ env.LLVM_VERSION }}-dev libpolly-${{ env.LLVM_VERSION }}-dev clang-${{ env.LLVM_VERSION }}
+          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-${{ env.LLVM_VERSION }}" >> $GITHUB_ENV
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy lint
+        run: cargo clippy -- -D warnings
+
+      - name: Run built-in tests
+        run: cargo run --release -- test
+
   build-release:
     name: Build release (${{ matrix.target }})
+    needs: [quality-gate]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -50,8 +85,11 @@ jobs:
       - name: Install LLVM (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${{ env.LLVM_VERSION }} main" \
+          sudo apt-get update
+          sudo apt-get install -y curl gnupg ca-certificates lsb-release
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${{ env.LLVM_VERSION }} main" \
             | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
           sudo apt-get install -y llvm-${{ env.LLVM_VERSION }}-dev libpolly-${{ env.LLVM_VERSION }}-dev clang-${{ env.LLVM_VERSION }}
@@ -106,6 +144,7 @@ jobs:
   # ── VS Code 확장 패키징 ──
   package-extension:
     name: Package VS Code Extension
+    needs: [quality-gate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -139,6 +178,18 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.vsix" \) -print0 \
+            | xargs -0 sha256sum > SHA256SUMS.txt
+
+      - name: Upload checksums artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kyte-checksums
+          path: artifacts/SHA256SUMS.txt
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -147,3 +198,4 @@ jobs:
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
             artifacts/**/*.vsix
+            artifacts/SHA256SUMS.txt

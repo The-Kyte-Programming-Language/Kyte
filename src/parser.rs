@@ -487,6 +487,12 @@ impl Parser {
         match kind_ident.as_str() {
             "main"   => AnchorKind::Main,
             "thread" => AnchorKind::Thread,
+            "event"  => {
+                self.expect(&Token::LParen);
+                let event_name = self.eat_ident();
+                self.expect(&Token::RParen);
+                AnchorKind::Event(event_name)
+            }
             k => panic!(
                 "Unknown anchor kind: {} at line {}:{}",
                 k,

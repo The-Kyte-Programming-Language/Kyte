@@ -5,6 +5,8 @@
 
 $ErrorActionPreference = "Stop"
 $LLVM_VERSION = "21"
+$WIND_REPO = "https://github.com/The-Kyte-Programming-Language/Wind.git"
+$WIND_DIR = Join-Path (Split-Path -Parent (Resolve-Path ".")) "wind"
 
 function Write-Header {
     Write-Host ""
@@ -98,7 +100,36 @@ if ($LASTEXITCODE -eq 0) {
     exit 1
 }
 
-# ── 7. VS Code 확장 ──
+# ── 7. Wind 패키지 매니저 ──
+Info "Setting up Wind package manager..."
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Info "Installing Git..."
+    choco install git -y
+    refreshenv
+}
+
+if (-not (Test-Path $WIND_DIR)) {
+    Info "Cloning Wind from $WIND_REPO"
+    git clone $WIND_REPO $WIND_DIR
+} else {
+    Info "Wind directory found. Updating repository..."
+    Push-Location $WIND_DIR
+    git pull --ff-only
+    Pop-Location
+}
+
+Push-Location $WIND_DIR
+cargo build --release
+if ($LASTEXITCODE -eq 0) {
+    Ok "Wind build complete: $WIND_DIR\target\release\wind.exe"
+} else {
+    Err "Wind build failed"
+    Pop-Location
+    exit 1
+}
+Pop-Location
+
+# ── 8. VS Code 확장 ──
 if (Test-Path "editors\vscode\package.json") {
     Info "Installing VS Code extension dependencies..."
     Push-Location editors\vscode
@@ -107,8 +138,9 @@ if (Test-Path "editors\vscode\package.json") {
     Ok "VS Code extension ready"
 }
 
-# ── 8. PATH에 추가 ──
+# ── 9. PATH에 추가 ──
 $kyteBin = (Resolve-Path "target\release").Path
+$windBin = (Resolve-Path (Join-Path $WIND_DIR "target\release")).Path
 $currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 if ($currentPath -notlike "*$kyteBin*") {
     Info "Adding kyte to user PATH..."
@@ -119,6 +151,16 @@ if ($currentPath -notlike "*$kyteBin*") {
     Ok "kyte already in PATH"
 }
 
+$currentPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+if ($currentPath -notlike "*$windBin*") {
+    Info "Adding wind to user PATH..."
+    [System.Environment]::SetEnvironmentVariable("PATH", "$windBin;$currentPath", "User")
+    $env:PATH = "$windBin;$env:PATH"
+    Ok "Added $windBin to PATH"
+} else {
+    Ok "wind already in PATH"
+}
+
 # ── 완료 ──
 Write-Host ""
 Write-Host "  Setup complete!" -ForegroundColor Green -BackgroundColor Black
@@ -127,4 +169,6 @@ Write-Host "  Quick start:" -ForegroundColor White
 Write-Host "    kyte examples\hello.ky        # Compile" -ForegroundColor Gray
 Write-Host "    kyte lsp                       # LSP server" -ForegroundColor Gray
 Write-Host "    kyte test                      # Test suite" -ForegroundColor Gray
+Write-Host "    wind init my-app               # Create project" -ForegroundColor Gray
+Write-Host "    wind run                       # Build + run" -ForegroundColor Gray
 Write-Host ""

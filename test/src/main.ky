@@ -49,10 +49,13 @@ function get_digit(int number, int pos) -> int {
 
 /// convert: 각 자릿수를 한국어 수 읽기용 코드로 yield
 /// yield 인코딩: digit * 100 + pos
+///```kyte
 ///   digit(1~9) → 일이삼사오육칠팔구
 ///   pos % 4: 0=일, 1=십, 2=백, 3=천
 ///   pos / 4: 0=_, 1=만, 2=억, 3=조, 4=경, 5=해
+///
 /// 특수: digit==0이고 4자리 경계일 때 큰 단위만 yield (음수 코드)
+///```
 function convert(int number) -> int {
     int d = count_digits(number);
     int count = 0;

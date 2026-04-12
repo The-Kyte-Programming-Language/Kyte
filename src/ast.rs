@@ -85,6 +85,7 @@ pub enum AnchorKind {
     Main,
     Plain,           // @handler() — no explicit kind
     Thread,          // @worker(thread)
+    Event(String),   // @handler(event(error))
 }
 
 // 위치 정보

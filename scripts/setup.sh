@@ -5,6 +5,12 @@
 set -euo pipefail
 
 LLVM_VERSION=21
+WIND_REPO="https://github.com/The-Kyte-Programming-Language/Wind.git"
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PARENT_DIR="$(cd "$ROOT_DIR/.." && pwd)"
+WIND_DIR="$PARENT_DIR/wind"
+
 BOLD="\033[1m"
 GREEN="\033[1;32m"
 CYAN="\033[1;36m"
@@ -103,7 +109,34 @@ info "Building Kyte..."
 cargo build --release
 ok "Build complete: target/release/kyte"
 
-# ── 6. VS Code 확장 ──
+# ── 6. Wind 패키지 매니저 ──
+info "Setting up Wind package manager..."
+if ! command -v git &>/dev/null; then
+    info "Installing Git..."
+    if [ "$OS" = "Linux" ]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq git
+    elif [ "$OS" = "Darwin" ]; then
+        brew install git
+    else
+        err "Unsupported OS for Git auto-install: $OS"
+        exit 1
+    fi
+fi
+
+if [ ! -d "$WIND_DIR/.git" ]; then
+    info "Cloning Wind from $WIND_REPO"
+    git clone "$WIND_REPO" "$WIND_DIR"
+else
+    info "Wind directory found. Updating repository..."
+    git -C "$WIND_DIR" pull --ff-only
+fi
+
+info "Building Wind..."
+cargo build --release --manifest-path "$WIND_DIR/Cargo.toml"
+ok "Build complete: $WIND_DIR/target/release/wind"
+
+# ── 7. VS Code 확장 ──
 if command -v node &>/dev/null && [ -d "editors/vscode" ]; then
     info "Installing VS Code extension dependencies..."
     cd editors/vscode
@@ -120,7 +153,10 @@ echo "  Quick start:"
 echo "    cargo run --release -- examples/hello.ky     # Compile"
 echo "    cargo run --release -- lsp                    # LSP server"
 echo "    cargo run --release -- test                   # Test suite"
+echo "    wind init my-app                              # Create project"
+echo "    wind run                                      # Build + run"
 echo ""
 echo "  Environment variables (add to your shell profile):"
 echo "    export LLVM_SYS_211_PREFIX=\"$LLVM_SYS_211_PREFIX\""
+echo "    export PATH=\"$ROOT_DIR/target/release:$WIND_DIR/target/release:\$PATH\""
 echo ""

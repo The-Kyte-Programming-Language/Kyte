@@ -455,7 +455,12 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.build_unreachable().unwrap();
             }
 
-            Stmt::Kill(_) => {
+            Stmt::Kill(msg) => {
+                if let Some(e) = msg {
+                    let val = self.compile_expr(e, params);
+                    let ty = self.guess_expr_ty(e, params);
+                    self.emit_print(val, Some(&ty));
+                }
                 let exit_fn = self.module.get_function("exit").unwrap();
                 self.builder.build_call(
                     exit_fn,

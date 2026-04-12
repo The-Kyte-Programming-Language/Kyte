@@ -558,8 +558,8 @@ fn extract_doc_comment(src: &str, fn_line: usize) -> String {
             result.push('\n');
         } else {
             result.push_str(line);
-            // Markdown에서 줄바꿈이 유지되도록 hard line break 사용
-            result.push_str("  \n");
+            // Markdown에서 줄바꿈 유지 + 한 줄 여백으로 가독성 개선
+            result.push_str("  \n\n");
         }
     }
     if in_code {

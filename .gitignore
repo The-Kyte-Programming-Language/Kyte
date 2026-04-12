@@ -1,7 +1,16 @@
-/target
+# Rust build output
+/target/
+
+# Kyte compiler artifacts
 *.o
 *.ll
 *.exe
+*.pdb
 crash.log
 output.ll
-editors/vscode/node_modules/
+
+# Local playground project
+/test/
+
+# VS Code extension dependencies
+/editors/vscode/node_modules/

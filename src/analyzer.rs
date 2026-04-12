@@ -138,6 +138,33 @@ impl Analyzer {
             current_span: Span { line: 0, col: 0 },
         };
 
+        // 0: main 앵커 존재/중복 검사 (top-level)
+        let mut main_count = 0usize;
+        let mut first_item_span: Option<Span> = None;
+        for (item, item_span) in &program.items {
+            if first_item_span.is_none() {
+                first_item_span = Some(*item_span);
+            }
+            if let TopLevel::Anchor { kind: AnchorKind::Main, .. } = item {
+                main_count += 1;
+            }
+        }
+        if main_count == 0 {
+            a.current_span = first_item_span.unwrap_or(Span { line: 1, col: 0 });
+            a.err(
+                "E018",
+                "Missing @...(main) anchor".to_string(),
+                "Add a top-level main anchor, e.g. @app(main)".to_string(),
+            );
+        } else if main_count > 1 {
+            a.current_span = first_item_span.unwrap_or(Span { line: 1, col: 0 });
+            a.err(
+                "E019",
+                format!("Multiple main anchors found ({})", main_count),
+                "Keep exactly one top-level @...(main) anchor".to_string(),
+            );
+        }
+
         // 1: collect function signatures + duplicate check
         for (item, item_span) in &program.items {
             if let TopLevel::Function { name, params, return_ty, .. } = item {
@@ -372,9 +399,9 @@ impl Analyzer {
                     if let Stmt::VaultDecl { name, .. } = s {
                         let has_free = body.iter().any(|(s2, _)| matches!(s2, Stmt::Free(n) if n == name));
                         if !has_free {
-                            self.warn("W002",
+                            self.err("E017",
                                 format!("Vault '{}' allocated in loop without explicit free", name),
-                                format!("Add free({}) before the loop ends to prevent memory leaks", name));
+                                format!("Add free({}) before the loop ends", name));
                         }
                     }
                 }
@@ -392,9 +419,9 @@ impl Analyzer {
                     if let Stmt::VaultDecl { name, .. } = s {
                         let has_free = body.iter().any(|(s2, _)| matches!(s2, Stmt::Free(n) if n == name));
                         if !has_free {
-                            self.warn("W002",
+                            self.err("E017",
                                 format!("Vault '{}' allocated in loop without explicit free", name),
-                                format!("Add free({}) before the loop ends to prevent memory leaks", name));
+                                format!("Add free({}) before the loop ends", name));
                         }
                     }
                 }

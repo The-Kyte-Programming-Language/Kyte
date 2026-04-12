@@ -1,9 +1,4 @@
+/// Kyte entry point
 @app(main) {
-    int x = 10;
-    int y = 20;
-    int sum = x + y;
-    print(sum);
-    for i in 0..3 {
-        print(i);
-    }
+    print("Hello, World!");
 }

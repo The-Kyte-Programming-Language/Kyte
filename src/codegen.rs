@@ -1278,6 +1278,8 @@ impl<'ctx> Codegen<'ctx> {
 
         machine.write_to_file(&self.module, FileType::Object, Path::new(path))
             .expect("Failed to write object file");
+        // TargetMachine Drop 시 LLVM atexit 충돌 방지 — 어차피 safe_exit 예정
+        std::mem::forget(machine);
     }
 
     pub fn write_ir_file(&self, path: &str) {

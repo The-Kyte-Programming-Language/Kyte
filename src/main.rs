@@ -362,6 +362,8 @@ fn run_test(label: &str, source: &str) {
 }
 
 fn compile_source(source: &str, label: &str) {
+    let start = std::time::Instant::now();
+
     let mut lex = Lexer::new(source);
     let tokens  = lex.tokenize();
     let mut par = Parser::new(tokens);
@@ -386,9 +388,8 @@ fn compile_source(source: &str, label: &str) {
     codegen.compile(&ast);
 
     println!("  \x1b[1;32m✓ LLVM IR generated\x1b[0m");
-    println!();
 
-    // IR을 파일로 출력하고 읽기 (LLVM 문자열 해제 크래시 우회)
+    // IR을 파일로 출력 (LLVM 문자열 해제 크래시 우회)
     let ir_tmp = if label.ends_with(".ky") {
         label.replace(".ky", ".ll")
     } else {
@@ -398,15 +399,17 @@ fn compile_source(source: &str, label: &str) {
 
     if label.ends_with(".ky") {
         codegen.write_object_file(&label.replace(".ky", ".o"));
-        println!("  \x1b[1;32m✓ Object file: {}\x1b[0m", label.replace(".ky", ".o"));
     }
 
-    println!("  \x1b[1;32m✓ IR file: {}\x1b[0m", ir_tmp);
-
-    // IR 파일 내용 출력
-    if let Ok(ir) = std::fs::read_to_string(&ir_tmp) {
-        println!("{}", ir);
-    }
+    let elapsed = start.elapsed();
+    let ms = elapsed.as_millis();
+    let time_str = if ms < 1000 {
+        format!("{}ms", ms)
+    } else {
+        format!("{:.2}s", elapsed.as_secs_f64())
+    };
+    println!("  \x1b[1;32m✓ done\x1b[0m  \x1b[1;90min {}\x1b[0m", time_str);
+    println!();
 
     // LLVM Context/Module 정리 시 접근 위반 회피 — 프로세스 즉시 종료
     safe_exit(0);

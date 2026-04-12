@@ -2,7 +2,7 @@ use crate::ast::*;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::BasicMetadataTypeEnum;
+use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::IntPredicate;
 use inkwell::FloatPredicate;
@@ -25,6 +25,9 @@ pub struct Codegen<'ctx> {
     functions: HashMap<String, FunctionValue<'ctx>>,
     fn_return_tys: HashMap<String, Option<Ty>>,
 
+    /// 배열 길이 추적
+    array_lengths: HashMap<String, u64>,
+
     /// break 시 점프할 블록 (loop/for 용)
     break_bb: Option<BasicBlock<'ctx>>,
 
@@ -45,6 +48,7 @@ impl<'ctx> Codegen<'ctx> {
             var_types: HashMap::new(),
             functions: HashMap::new(),
             fn_return_tys: HashMap::new(),
+            array_lengths: HashMap::new(),
             break_bb: None,
             current_fn: None,
         }
@@ -70,11 +74,54 @@ impl<'ctx> Codegen<'ctx> {
 
     fn ty_to_llvm(&self, ty: &Ty) -> BasicMetadataTypeEnum<'ctx> {
         match ty {
-            Ty::Int    => self.i64_type().into(),
-            Ty::Float  => self.f64_type().into(),
-            Ty::Bool   => self.bool_type().into(),
-            Ty::String => self.ptr_type().into(),
+            Ty::Int | Ty::I64 => self.i64_type().into(),
+            Ty::I8            => self.context.i8_type().into(),
+            Ty::I16           => self.context.i16_type().into(),
+            Ty::I32           => self.context.i32_type().into(),
+            Ty::U8            => self.context.i8_type().into(),
+            Ty::U16           => self.context.i16_type().into(),
+            Ty::U32           => self.context.i32_type().into(),
+            Ty::U64           => self.i64_type().into(),
+            Ty::Float         => self.f64_type().into(),
+            Ty::Bool          => self.bool_type().into(),
+            Ty::String        => self.ptr_type().into(),
+            Ty::Array(_)      => self.ptr_type().into(),
         }
+    }
+
+    /// Ty → LLVM IntType (Int/I8..U64 전용)
+    fn ty_to_int_type(&self, ty: &Ty) -> inkwell::types::IntType<'ctx> {
+        match ty {
+            Ty::I8  | Ty::U8  => self.context.i8_type(),
+            Ty::I16 | Ty::U16 => self.context.i16_type(),
+            Ty::I32 | Ty::U32 => self.context.i32_type(),
+            Ty::Int | Ty::I64 | Ty::U64 => self.i64_type(),
+            Ty::Bool => self.bool_type(),
+            _ => self.i64_type(),
+        }
+    }
+
+    /// Ty → BasicTypeEnum (elem_llvm_type 대체)
+    fn ty_to_basic(&self, ty: &Ty) -> inkwell::types::BasicTypeEnum<'ctx> {
+        match ty {
+            Ty::I8  | Ty::U8  => self.context.i8_type().into(),
+            Ty::I16 | Ty::U16 => self.context.i16_type().into(),
+            Ty::I32 | Ty::U32 => self.context.i32_type().into(),
+            Ty::Int | Ty::I64 | Ty::U64 => self.i64_type().into(),
+            Ty::Float          => self.f64_type().into(),
+            Ty::Bool           => self.bool_type().into(),
+            Ty::String         => self.ptr_type().into(),
+            Ty::Array(_)       => self.ptr_type().into(),
+        }
+    }
+
+    fn is_signed(ty: &Ty) -> bool {
+        matches!(ty, Ty::Int | Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64)
+    }
+
+    fn is_integer_ty(ty: &Ty) -> bool {
+        matches!(ty, Ty::Int | Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64
+                    | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
     }
 
     fn declare_printf(&mut self) {
@@ -98,12 +145,8 @@ impl<'ctx> Codegen<'ctx> {
             Some(inst) => temp_builder.position_before(&inst),
             None       => temp_builder.position_at_end(entry),
         }
-        match ty {
-            Ty::Int    => temp_builder.build_alloca(self.i64_type(), name).unwrap(),
-            Ty::Float  => temp_builder.build_alloca(self.f64_type(), name).unwrap(),
-            Ty::Bool   => temp_builder.build_alloca(self.bool_type(), name).unwrap(),
-            Ty::String => temp_builder.build_alloca(self.ptr_type(), name).unwrap(),
-        }
+        let llvm_ty = self.ty_to_basic(ty);
+        temp_builder.build_alloca(llvm_ty, name).unwrap()
     }
 
     fn store_var(&self, name: &str, val: BasicValueEnum<'ctx>) {
@@ -113,12 +156,8 @@ impl<'ctx> Codegen<'ctx> {
 
     fn load_var(&self, name: &str, ty: &Ty) -> BasicValueEnum<'ctx> {
         let ptr = self.variables[name];
-        match ty {
-            Ty::Int    => self.builder.build_load(self.i64_type(), ptr, name).unwrap(),
-            Ty::Float  => self.builder.build_load(self.f64_type(), ptr, name).unwrap(),
-            Ty::Bool   => self.builder.build_load(self.bool_type(), ptr, name).unwrap(),
-            Ty::String => self.builder.build_load(self.ptr_type(), ptr, name).unwrap(),
-        }
+        let llvm_ty = self.ty_to_basic(ty);
+        self.builder.build_load(llvm_ty, ptr, name).unwrap()
     }
 
     // ── 프로그램 전체 코드 생성 ──
@@ -134,11 +173,11 @@ impl<'ctx> Codegen<'ctx> {
                     params.iter().map(|p| self.ty_to_llvm(&p.ty)).collect();
 
                 let fn_type = match return_ty {
-                    Some(Ty::Int)    => self.i64_type().fn_type(&param_types, false),
-                    Some(Ty::Float)  => self.f64_type().fn_type(&param_types, false),
-                    Some(Ty::Bool)   => self.bool_type().fn_type(&param_types, false),
-                    Some(Ty::String) => self.ptr_type().fn_type(&param_types, false),
-                    None             => self.context.void_type().fn_type(&param_types, false),
+                    Some(ty) => {
+                        let ret_ty = self.ty_to_basic(ty);
+                        ret_ty.fn_type(&param_types, false)
+                    }
+                    None => self.context.void_type().fn_type(&param_types, false),
                 };
 
                 let func = self.module.add_function(name, fn_type, None);
@@ -169,11 +208,15 @@ impl<'ctx> Codegen<'ctx> {
                 // 암시적 반환
                 if self.no_terminator() {
                     match return_ty {
-                        None             => { self.builder.build_return(None).unwrap(); }
-                        Some(Ty::Int)    => { self.builder.build_return(Some(&self.i64_type().const_int(0, false))).unwrap(); }
-                        Some(Ty::Float)  => { self.builder.build_return(Some(&self.f64_type().const_float(0.0))).unwrap(); }
-                        Some(Ty::Bool)   => { self.builder.build_return(Some(&self.bool_type().const_int(0, false))).unwrap(); }
-                        Some(Ty::String) => { self.builder.build_return(Some(&self.ptr_type().const_null())).unwrap(); }
+                        None => { self.builder.build_return(None).unwrap(); }
+                        Some(Ty::Float) => { self.builder.build_return(Some(&self.f64_type().const_float(0.0))).unwrap(); }
+                        Some(Ty::String) | Some(Ty::Array(_)) => {
+                            self.builder.build_return(Some(&self.ptr_type().const_null())).unwrap();
+                        }
+                        Some(ty) => {
+                            let int_ty = self.ty_to_int_type(ty);
+                            self.builder.build_return(Some(&int_ty.const_int(0, false))).unwrap();
+                        }
                     }
                 }
 
@@ -219,6 +262,27 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap_or(true)
     }
 
+    /// IntLit은 항상 i64로 생성되므로, 대상 타입에 맞게 truncate/extend
+    fn coerce_to_ty(&self, val: BasicValueEnum<'ctx>, target: &Ty) -> BasicValueEnum<'ctx> {
+        if !Self::is_integer_ty(target) || matches!(target, Ty::Int | Ty::I64 | Ty::U64) {
+            return val;
+        }
+        if let BasicValueEnum::IntValue(iv) = val {
+            let target_ty = self.ty_to_int_type(target);
+            let src_width = iv.get_type().get_bit_width();
+            let dst_width = target_ty.get_bit_width();
+            if src_width == dst_width { return val; }
+            if src_width > dst_width {
+                return self.builder.build_int_truncate(iv, target_ty, "trunc").unwrap().into();
+            } else if Self::is_signed(target) {
+                return self.builder.build_int_s_extend(iv, target_ty, "sext").unwrap().into();
+            } else {
+                return self.builder.build_int_z_extend(iv, target_ty, "zext").unwrap().into();
+            }
+        }
+        val
+    }
+
     // ── 구문 목록 ──
 
     fn compile_stmts(&mut self, stmts: &[(Stmt, Span)], params: &[Param]) {
@@ -236,14 +300,33 @@ impl<'ctx> Codegen<'ctx> {
             Stmt::VarDecl { ty, name, value } | Stmt::VaultDecl { ty, name, value } => {
                 let alloca = self.build_alloca(name, ty);
                 let val = self.compile_expr(value, params);
+                let val = self.coerce_to_ty(val, ty);
                 self.builder.build_store(alloca, val).unwrap();
                 self.variables.insert(name.clone(), alloca);
                 self.var_types.insert(name.clone(), ty.clone());
+                // 배열 길이 추적
+                if let Expr::ArrayLit(elems) = value {
+                    self.array_lengths.insert(name.clone(), elems.len() as u64);
+                }
             }
 
             Stmt::Assign { name, value } => {
                 let val = self.compile_expr(value, params);
                 self.store_var(name, val);
+            }
+
+            Stmt::IndexAssign { name, index, value } => {
+                let ty = self.guess_var_ty(name, params);
+                if let Ty::Array(ref inner) = ty {
+                    let data_ptr = self.load_var(name, &ty).into_pointer_value();
+                    let idx = self.compile_expr(index, params).into_int_value();
+                    let elem_llvm_ty = self.elem_llvm_type(inner);
+                    let gep = unsafe {
+                        self.builder.build_gep(elem_llvm_ty, data_ptr, &[idx], "idx_ptr").unwrap()
+                    };
+                    let val = self.compile_expr(value, params);
+                    self.builder.build_store(gep, val).unwrap();
+                }
             }
 
             Stmt::CompoundAssign { name, op, value } => {
@@ -389,7 +472,8 @@ impl<'ctx> Codegen<'ctx> {
             Stmt::Yield(e) => {
                 // yield → print
                 let val = self.compile_expr(e, params);
-                self.emit_print(val, params);
+                let ty = self.guess_expr_ty(e, params);
+                self.emit_print(val, Some(&ty));
             }
 
             Stmt::InlineAnchor { body, .. } => {
@@ -404,13 +488,13 @@ impl<'ctx> Codegen<'ctx> {
 
     // ── printf 헬퍼 ──
 
-    fn emit_print(&self, val: BasicValueEnum<'ctx>, _params: &[Param]) {
+    fn emit_print(&self, val: BasicValueEnum<'ctx>, ty: Option<&Ty>) {
         let printf = self.module.get_function("printf").unwrap();
         match val {
             BasicValueEnum::IntValue(iv) => {
-                // bool(i1) vs int(i64)
                 let width = iv.get_type().get_bit_width();
                 if width == 1 {
+                    // bool(i1)
                     let fmt = self.builder.build_global_string_ptr("%s\n", "fmt_bool").unwrap();
                     let true_str  = self.builder.build_global_string_ptr("true", "s_true").unwrap();
                     let false_str = self.builder.build_global_string_ptr("false", "s_false").unwrap();
@@ -426,10 +510,23 @@ impl<'ctx> Codegen<'ctx> {
                         "",
                     ).unwrap();
                 } else {
+                    // i8~i64, u8~u64 → extend to i64 for printf
+                    let print_val = if width < 64 {
+                        let is_unsigned = matches!(ty,
+                            Some(Ty::U8) | Some(Ty::U16) | Some(Ty::U32) | Some(Ty::U64)
+                        );
+                        if is_unsigned {
+                            self.builder.build_int_z_extend(iv, self.i64_type(), "ext_print").unwrap()
+                        } else {
+                            self.builder.build_int_s_extend(iv, self.i64_type(), "ext_print").unwrap()
+                        }
+                    } else {
+                        iv
+                    };
                     let fmt = self.builder.build_global_string_ptr("%lld\n", "fmt_int").unwrap();
                     self.builder.build_call(
                         printf,
-                        &[fmt.as_pointer_value().into(), iv.into()],
+                        &[fmt.as_pointer_value().into(), print_val.into()],
                         "",
                     ).unwrap();
                 }
@@ -494,15 +591,31 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             Expr::BinOp { left, op, right } => {
-                let l = self.compile_expr(left, params);
-                let r = self.compile_expr(right, params);
+                let mut l = self.compile_expr(left, params);
+                let mut r = self.compile_expr(right, params);
 
                 // string + string → concat (간단한 구현은 skip — 문자열 포인터로 유지)
                 // 여기선 int/float/bool 만 처리
                 let ty = self.guess_expr_ty(left, params);
+                if Self::is_integer_ty(&ty) {
+                    l = self.coerce_to_ty(l, &ty);
+                    r = self.coerce_to_ty(r, &ty);
+                }
                 self.compile_binop(op, l, r, &ty)
             }
             Expr::Call { name, args } => {
+                // len() 빌트인
+                if name == "len" {
+                    if let Some(arg_name) = match &args[0] {
+                        Expr::Ident(n) => Some(n.clone()),
+                        _ => None,
+                    } {
+                        let len = self.array_lengths.get(&arg_name).copied().unwrap_or(0);
+                        return self.i64_type().const_int(len, false).into();
+                    }
+                    return self.i64_type().const_int(0, false).into();
+                }
+
                 let func = self.functions[name];
                 let compiled_args: Vec<BasicMetadataValueEnum> =
                     args.iter().map(|a| self.compile_expr(a, params).into()).collect();
@@ -511,49 +624,106 @@ impl<'ctx> Codegen<'ctx> {
                     .basic()
                     .unwrap_or_else(|| self.i64_type().const_int(0, false).into())
             }
+
+            Expr::ArrayLit(elems) => {
+                let elem_ty = self.guess_expr_ty(&elems[0], params);
+                let elem_llvm_ty = self.elem_llvm_type(&elem_ty);
+                let count = elems.len() as u64;
+                let size = self.i64_type().const_int(count, false);
+                let data_ptr = self.builder.build_array_alloca(elem_llvm_ty, size, "arr_data").unwrap();
+                for (i, elem) in elems.iter().enumerate() {
+                    let val = self.compile_expr(elem, params);
+                    let idx = self.i64_type().const_int(i as u64, false);
+                    let gep = unsafe {
+                        self.builder.build_gep(elem_llvm_ty, data_ptr, &[idx], "arr_elem").unwrap()
+                    };
+                    self.builder.build_store(gep, val).unwrap();
+                }
+                data_ptr.into()
+            }
+
+            Expr::Index { array, index } => {
+                let arr_ty = self.guess_expr_ty(array, params);
+                let inner = match &arr_ty {
+                    Ty::Array(inner) => *inner.clone(),
+                    _ => Ty::Int,
+                };
+                let data_ptr = self.compile_expr(array, params).into_pointer_value();
+                let idx = self.compile_expr(index, params).into_int_value();
+                let elem_llvm_ty = self.elem_llvm_type(&inner);
+                let gep = unsafe {
+                    self.builder.build_gep(elem_llvm_ty, data_ptr, &[idx], "idx_ptr").unwrap()
+                };
+                self.builder.build_load(elem_llvm_ty, gep, "idx_val").unwrap()
+            }
         }
     }
 
     fn compile_binop(&self, op: &BinOpKind, l: BasicValueEnum<'ctx>, r: BasicValueEnum<'ctx>, ty: &Ty) -> BasicValueEnum<'ctx> {
-        match ty {
-            Ty::Int => {
-                let li = l.into_int_value();
-                let ri = r.into_int_value();
-                match op {
-                    BinOpKind::Add => self.builder.build_int_add(li, ri, "add").unwrap().into(),
-                    BinOpKind::Sub => self.builder.build_int_sub(li, ri, "sub").unwrap().into(),
-                    BinOpKind::Mul => self.builder.build_int_mul(li, ri, "mul").unwrap().into(),
-                    BinOpKind::Div => self.builder.build_int_signed_div(li, ri, "div").unwrap().into(),
-                    BinOpKind::Mod => self.builder.build_int_signed_rem(li, ri, "mod").unwrap().into(),
-                    BinOpKind::Lt  => self.builder.build_int_compare(IntPredicate::SLT, li, ri, "lt").unwrap().into(),
-                    BinOpKind::Gt  => self.builder.build_int_compare(IntPredicate::SGT, li, ri, "gt").unwrap().into(),
-                    BinOpKind::Le  => self.builder.build_int_compare(IntPredicate::SLE, li, ri, "le").unwrap().into(),
-                    BinOpKind::Ge  => self.builder.build_int_compare(IntPredicate::SGE, li, ri, "ge").unwrap().into(),
-                    BinOpKind::Eq  => self.builder.build_int_compare(IntPredicate::EQ, li, ri, "eq").unwrap().into(),
-                    BinOpKind::Neq => self.builder.build_int_compare(IntPredicate::NE, li, ri, "ne").unwrap().into(),
-                    BinOpKind::And => self.builder.build_and(li, ri, "and").unwrap().into(),
-                    BinOpKind::Or  => self.builder.build_or(li, ri, "or").unwrap().into(),
+        if Self::is_integer_ty(ty) || matches!(ty, Ty::Array(_)) {
+            let li = l.into_int_value();
+            let ri = r.into_int_value();
+            let signed = Self::is_signed(ty);
+            match op {
+                BinOpKind::Add => self.builder.build_int_add(li, ri, "add").unwrap().into(),
+                BinOpKind::Sub => self.builder.build_int_sub(li, ri, "sub").unwrap().into(),
+                BinOpKind::Mul => self.builder.build_int_mul(li, ri, "mul").unwrap().into(),
+                BinOpKind::Div => {
+                    if signed {
+                        self.builder.build_int_signed_div(li, ri, "sdiv").unwrap().into()
+                    } else {
+                        self.builder.build_int_unsigned_div(li, ri, "udiv").unwrap().into()
+                    }
                 }
-            }
-            Ty::Float => {
-                let lf = l.into_float_value();
-                let rf = r.into_float_value();
-                match op {
-                    BinOpKind::Add => self.builder.build_float_add(lf, rf, "fadd").unwrap().into(),
-                    BinOpKind::Sub => self.builder.build_float_sub(lf, rf, "fsub").unwrap().into(),
-                    BinOpKind::Mul => self.builder.build_float_mul(lf, rf, "fmul").unwrap().into(),
-                    BinOpKind::Div => self.builder.build_float_div(lf, rf, "fdiv").unwrap().into(),
-                    BinOpKind::Mod => self.builder.build_float_rem(lf, rf, "fmod").unwrap().into(),
-                    BinOpKind::Lt  => self.builder.build_float_compare(FloatPredicate::OLT, lf, rf, "flt").unwrap().into(),
-                    BinOpKind::Gt  => self.builder.build_float_compare(FloatPredicate::OGT, lf, rf, "fgt").unwrap().into(),
-                    BinOpKind::Le  => self.builder.build_float_compare(FloatPredicate::OLE, lf, rf, "fle").unwrap().into(),
-                    BinOpKind::Ge  => self.builder.build_float_compare(FloatPredicate::OGE, lf, rf, "fge").unwrap().into(),
-                    BinOpKind::Eq  => self.builder.build_float_compare(FloatPredicate::OEQ, lf, rf, "feq").unwrap().into(),
-                    BinOpKind::Neq => self.builder.build_float_compare(FloatPredicate::ONE, lf, rf, "fne").unwrap().into(),
-                    _ => l,
+                BinOpKind::Mod => {
+                    if signed {
+                        self.builder.build_int_signed_rem(li, ri, "srem").unwrap().into()
+                    } else {
+                        self.builder.build_int_unsigned_rem(li, ri, "urem").unwrap().into()
+                    }
                 }
+                BinOpKind::Lt => {
+                    let pred = if signed { IntPredicate::SLT } else { IntPredicate::ULT };
+                    self.builder.build_int_compare(pred, li, ri, "lt").unwrap().into()
+                }
+                BinOpKind::Gt => {
+                    let pred = if signed { IntPredicate::SGT } else { IntPredicate::UGT };
+                    self.builder.build_int_compare(pred, li, ri, "gt").unwrap().into()
+                }
+                BinOpKind::Le => {
+                    let pred = if signed { IntPredicate::SLE } else { IntPredicate::ULE };
+                    self.builder.build_int_compare(pred, li, ri, "le").unwrap().into()
+                }
+                BinOpKind::Ge => {
+                    let pred = if signed { IntPredicate::SGE } else { IntPredicate::UGE };
+                    self.builder.build_int_compare(pred, li, ri, "ge").unwrap().into()
+                }
+                BinOpKind::Eq  => self.builder.build_int_compare(IntPredicate::EQ, li, ri, "eq").unwrap().into(),
+                BinOpKind::Neq => self.builder.build_int_compare(IntPredicate::NE, li, ri, "ne").unwrap().into(),
+                BinOpKind::And => self.builder.build_and(li, ri, "and").unwrap().into(),
+                BinOpKind::Or  => self.builder.build_or(li, ri, "or").unwrap().into(),
             }
-            Ty::Bool => {
+        } else {
+            match ty {
+                Ty::Float => {
+                    let lf = l.into_float_value();
+                    let rf = r.into_float_value();
+                    match op {
+                        BinOpKind::Add => self.builder.build_float_add(lf, rf, "fadd").unwrap().into(),
+                        BinOpKind::Sub => self.builder.build_float_sub(lf, rf, "fsub").unwrap().into(),
+                        BinOpKind::Mul => self.builder.build_float_mul(lf, rf, "fmul").unwrap().into(),
+                        BinOpKind::Div => self.builder.build_float_div(lf, rf, "fdiv").unwrap().into(),
+                        BinOpKind::Mod => self.builder.build_float_rem(lf, rf, "fmod").unwrap().into(),
+                        BinOpKind::Lt  => self.builder.build_float_compare(FloatPredicate::OLT, lf, rf, "flt").unwrap().into(),
+                        BinOpKind::Gt  => self.builder.build_float_compare(FloatPredicate::OGT, lf, rf, "fgt").unwrap().into(),
+                        BinOpKind::Le  => self.builder.build_float_compare(FloatPredicate::OLE, lf, rf, "fle").unwrap().into(),
+                        BinOpKind::Ge  => self.builder.build_float_compare(FloatPredicate::OGE, lf, rf, "fge").unwrap().into(),
+                        BinOpKind::Eq  => self.builder.build_float_compare(FloatPredicate::OEQ, lf, rf, "feq").unwrap().into(),
+                        BinOpKind::Neq => self.builder.build_float_compare(FloatPredicate::ONE, lf, rf, "fne").unwrap().into(),
+                        _ => l,
+                    }
+                }
+                Ty::Bool => {
                 let li = l.into_int_value();
                 let ri = r.into_int_value();
                 match op {
@@ -568,10 +738,16 @@ impl<'ctx> Codegen<'ctx> {
                 // string ops — 지금은 포인터 그대로 반환
                 l
             }
+            _ => l,
+            }
         }
     }
 
     // ── 타입 추론 (codegen 시점, 간단 버전) ──
+
+    fn elem_llvm_type(&self, ty: &Ty) -> inkwell::types::BasicTypeEnum<'ctx> {
+        self.ty_to_basic(ty)
+    }
 
     fn guess_var_ty(&self, name: &str, params: &[Param]) -> Ty {
         if let Some(ty) = self.var_types.get(name) {
@@ -608,6 +784,16 @@ impl<'ctx> Codegen<'ctx> {
                 self.fn_return_tys.get(name)
                     .and_then(|opt| opt.clone())
                     .unwrap_or(Ty::Int)
+            }
+            Expr::ArrayLit(elems) => {
+                if elems.is_empty() { Ty::Array(Box::new(Ty::Int)) }
+                else { Ty::Array(Box::new(self.guess_expr_ty(&elems[0], params))) }
+            }
+            Expr::Index { array, .. } => {
+                match self.guess_expr_ty(array, params) {
+                    Ty::Array(inner) => *inner,
+                    _ => Ty::Int,
+                }
             }
         }
     }

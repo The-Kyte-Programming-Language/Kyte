@@ -2,7 +2,6 @@
 pub enum Token {
     // 앵커
     At,           // @
-    Hash,         // #
 
     // 키워드
     Main,         // main
@@ -20,7 +19,6 @@ pub enum Token {
     Break,        // break
     True,         // true
     False,        // false
-    Alloc,        // alloc
     Free,         // free
 
     // 타입
@@ -28,6 +26,14 @@ pub enum Token {
     Float,        // float
     String,       // string
     Bool,         // bool
+    TyI8,         // i8
+    TyI16,        // i16
+    TyI32,        // i32
+    TyI64,        // i64
+    TyU8,         // u8
+    TyU16,        // u16
+    TyU32,        // u32
+    TyU64,        // u64
 
     // 리터럴
     IntLit(i64),
@@ -42,6 +48,8 @@ pub enum Token {
     RParen,       // )
     LBrace,       // {
     RBrace,       // }
+    LBracket,     // [
+    RBracket,     // ]
     Semicolon,    // ;
     Comma,        // ,
     Eq,           // =
@@ -75,11 +83,8 @@ pub enum Token {
 #[derive(Debug, PartialEq, Clone)]
 pub enum AnchorKind {
     Main,
-    Plain,           // @handler(retry(3)) — no explicit kind
-    Event(String),   // @handler(event("click"))
+    Plain,           // @handler() — no explicit kind
     Thread,          // @worker(thread)
-    OnError,         // @recovery(on_error)
-    Timeout(u64),    // @limiter(timeout(5000))
 }
 
 // 위치 정보
@@ -96,6 +101,15 @@ pub enum Ty {
     Float,
     String,
     Bool,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Array(Box<Ty>),  // int[], u8[], etc.
 }
 
 // 표현식
@@ -118,6 +132,13 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Expr>,
+    },
+    // [1, 2, 3]
+    ArrayLit(Vec<Expr>),
+    // arr[index]
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
     },
 }
 
@@ -152,6 +173,12 @@ pub enum Stmt {
     // x = 10;
     Assign {
         name:  String,
+        value: Expr,
+    },
+    // arr[i] = 10;
+    IndexAssign {
+        name:  String,
+        index: Expr,
         value: Expr,
     },
     // x += 10;  x -= 5;  etc.
@@ -191,7 +218,6 @@ pub enum Stmt {
     InlineAnchor {
         name:  String,
         kind:  AnchorKind,
-        retry: Option<u32>,
         body:  Vec<(Stmt, Span)>,
     },
     // 표현식 구문 (함수 호출 등)
@@ -212,7 +238,6 @@ pub enum TopLevel {
     Anchor {
         name:      String,
         kind:      AnchorKind,
-        retry:     Option<u32>,
         body:      Vec<(Stmt, Span)>,
         children:  Vec<(TopLevel, Span)>,
     },

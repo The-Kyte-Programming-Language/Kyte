@@ -48,7 +48,13 @@ impl Parser {
         if self.current() == expected {
             self.advance();
         } else {
-            panic!("Expected {:?} but got {:?}", expected, self.current());
+                panic!(
+                    "Expected {:?} but got {:?} at line {}:{}",
+                    expected,
+                    self.current(),
+                    self.current_line(),
+                    self.current_col()
+                );
         }
     }
 
@@ -75,18 +81,52 @@ impl Parser {
             Token::Float    => { self.advance(); "float".to_string() }
             Token::String   => { self.advance(); "string".to_string() }
             Token::Bool     => { self.advance(); "bool".to_string() }
-            t => panic!("Expected identifier but got {:?}", t),
+            Token::TyI8     => { self.advance(); "i8".to_string() }
+            Token::TyI16    => { self.advance(); "i16".to_string() }
+            Token::TyI32    => { self.advance(); "i32".to_string() }
+            Token::TyI64    => { self.advance(); "i64".to_string() }
+            Token::TyU8     => { self.advance(); "u8".to_string() }
+            Token::TyU16    => { self.advance(); "u16".to_string() }
+            Token::TyU32    => { self.advance(); "u32".to_string() }
+            Token::TyU64    => { self.advance(); "u64".to_string() }
+            t => panic!(
+                "Expected identifier but got {:?} at line {}:{}",
+                t,
+                self.current_line(),
+                self.current_col()
+            ),
         }
     }
 
     // 타입 파싱
     fn parse_ty(&mut self) -> Ty {
-        match self.current().clone() {
+        let base = match self.current().clone() {
             Token::Int    => { self.advance(); Ty::Int }
             Token::Float  => { self.advance(); Ty::Float }
             Token::String => { self.advance(); Ty::String }
             Token::Bool   => { self.advance(); Ty::Bool }
-            t => panic!("Expected type but got {:?}", t),
+            Token::TyI8   => { self.advance(); Ty::I8 }
+            Token::TyI16  => { self.advance(); Ty::I16 }
+            Token::TyI32  => { self.advance(); Ty::I32 }
+            Token::TyI64  => { self.advance(); Ty::I64 }
+            Token::TyU8   => { self.advance(); Ty::U8 }
+            Token::TyU16  => { self.advance(); Ty::U16 }
+            Token::TyU32  => { self.advance(); Ty::U32 }
+            Token::TyU64  => { self.advance(); Ty::U64 }
+            t => panic!(
+                "Expected type but got {:?} at line {}:{}",
+                t,
+                self.current_line(),
+                self.current_col()
+            ),
+        };
+        // int[] 같은 배열 타입
+        if self.current() == &Token::LBracket {
+            self.advance();
+            self.expect(&Token::RBracket);
+            Ty::Array(Box::new(base))
+        } else {
+            base
         }
     }
 
@@ -184,7 +224,7 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expr {
-        match self.current().clone() {
+        let mut expr = match self.current().clone() {
             Token::IntLit(n)    => { self.advance(); Expr::IntLit(n) }
             Token::FloatLit(f)  => { self.advance(); Expr::FloatLit(f) }
             Token::StringLit(s) => { self.advance(); Expr::StringLit(s) }
@@ -208,14 +248,38 @@ impl Parser {
                     Expr::Ident(s)
                 }
             }
+            // 배열 리터럴: [1, 2, 3]
+            Token::LBracket => {
+                self.advance();
+                let mut elems = Vec::new();
+                while self.current() != &Token::RBracket {
+                    elems.push(self.parse_expr());
+                    if self.current() == &Token::Comma { self.advance(); }
+                }
+                self.expect(&Token::RBracket);
+                Expr::ArrayLit(elems)
+            }
             Token::LParen => {
                 self.advance();
                 let e = self.parse_expr();
                 self.expect(&Token::RParen);
                 e
             }
-            t => panic!("Unexpected token in expression: {:?}", t),
+            t => panic!(
+                "Unexpected token in expression: {:?} at line {}:{}",
+                t,
+                self.current_line(),
+                self.current_col()
+            ),
+        };
+        // 후위 인덱스 접근: expr[index]
+        while self.current() == &Token::LBracket {
+            self.advance();
+            let index = self.parse_expr();
+            self.expect(&Token::RBracket);
+            expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
         }
+        expr
     }
 
     // 구문 파싱
@@ -329,7 +393,9 @@ impl Parser {
                 Stmt::VaultDecl { ty, name, value }
             }
             // 변수 선언 or 대입 or 표현식
-            Token::Int | Token::Float | Token::String | Token::Bool => {
+            Token::Int | Token::Float | Token::String | Token::Bool
+            | Token::TyI8 | Token::TyI16 | Token::TyI32 | Token::TyI64
+            | Token::TyU8 | Token::TyU16 | Token::TyU32 | Token::TyU64 => {
                 let ty = self.parse_ty();
                 let name = self.eat_ident();
                 self.expect(&Token::Eq);
@@ -339,40 +405,61 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                // 복합 대입 연산자 (+=, -=, *=, /=, %=)
-                let compound_op = match self.current() {
-                    Token::PlusEq    => Some(BinOpKind::Add),
-                    Token::MinusEq   => Some(BinOpKind::Sub),
-                    Token::StarEq    => Some(BinOpKind::Mul),
-                    Token::SlashEq   => Some(BinOpKind::Div),
-                    Token::PercentEq => Some(BinOpKind::Mod),
-                    _ => None,
-                };
-                if let Some(op) = compound_op {
+                // 배열 인덱스 대입: arr[i] = 10;
+                if self.current() == &Token::LBracket {
                     self.advance();
+                    let index = self.parse_expr();
+                    self.expect(&Token::RBracket);
+                    self.expect(&Token::Eq);
                     let value = self.parse_expr();
                     self.expect(&Token::Semicolon);
-                    Stmt::CompoundAssign { name, op, value }
-                } else if self.current() == &Token::Eq {
-                    self.advance();
-                    let value = self.parse_expr();
-                    self.expect(&Token::Semicolon);
-                    Stmt::Assign { name, value }
-                } else if self.current() == &Token::LParen {
-                    self.advance();
-                    let mut args = Vec::new();
-                    while self.current() != &Token::RParen {
-                        args.push(self.parse_expr());
-                        if self.current() == &Token::Comma { self.advance(); }
-                    }
-                    self.expect(&Token::RParen);
-                    self.expect(&Token::Semicolon);
-                    Stmt::ExprStmt(Expr::Call { name, args })
+                    Stmt::IndexAssign { name, index, value }
                 } else {
-                    panic!("Unexpected token after ident: {:?}", self.current())
+                    // 복합 대입 연산자 (+=, -=, *=, /=, %=)
+                    let compound_op = match self.current() {
+                        Token::PlusEq    => Some(BinOpKind::Add),
+                        Token::MinusEq   => Some(BinOpKind::Sub),
+                        Token::StarEq    => Some(BinOpKind::Mul),
+                        Token::SlashEq   => Some(BinOpKind::Div),
+                        Token::PercentEq => Some(BinOpKind::Mod),
+                        _ => None,
+                    };
+                    if let Some(op) = compound_op {
+                        self.advance();
+                        let value = self.parse_expr();
+                        self.expect(&Token::Semicolon);
+                        Stmt::CompoundAssign { name, op, value }
+                    } else if self.current() == &Token::Eq {
+                        self.advance();
+                        let value = self.parse_expr();
+                        self.expect(&Token::Semicolon);
+                        Stmt::Assign { name, value }
+                    } else if self.current() == &Token::LParen {
+                        self.advance();
+                        let mut args = Vec::new();
+                        while self.current() != &Token::RParen {
+                            args.push(self.parse_expr());
+                            if self.current() == &Token::Comma { self.advance(); }
+                        }
+                        self.expect(&Token::RParen);
+                        self.expect(&Token::Semicolon);
+                        Stmt::ExprStmt(Expr::Call { name, args })
+                    } else {
+                        panic!(
+                            "Unexpected token after ident: {:?} at line {}:{}",
+                            self.current(),
+                            self.current_line(),
+                            self.current_col()
+                        )
+                    }
                 }
             }
-            t => panic!("Unexpected token in statement: {:?}", t),
+            t => panic!(
+                "Unexpected token in statement: {:?} at line {}:{}",
+                t,
+                self.current_line(),
+                self.current_col()
+            ),
         };
         (stmt, span)
     }
@@ -390,63 +477,23 @@ impl Parser {
     }
 
     // 앵커 종류 파싱 (공통 헬퍼)
-    fn parse_anchor_kind(&mut self) -> (AnchorKind, Option<u32>) {
-        // retry만 있는 경우: @name(retry(N))
-        // 또는 빈 앵커: @name()
+    fn parse_anchor_kind(&mut self) -> AnchorKind {
+        // 빈 앵커: @name()
         if self.current() == &Token::RParen {
-            return (AnchorKind::Plain, None);
+            return AnchorKind::Plain;
         }
 
         let kind_ident = self.eat_ident();
-
-        // retry가 kind 자리에 온 경우 → Plain + retry
-        if kind_ident == "retry" {
-            self.expect(&Token::LParen);
-            let n = if let Token::IntLit(n) = self.current().clone() {
-                self.advance(); n as u32
-            } else { panic!("Expected retry count") };
-            self.expect(&Token::RParen);
-            return (AnchorKind::Plain, Some(n));
+        match kind_ident.as_str() {
+            "main"   => AnchorKind::Main,
+            "thread" => AnchorKind::Thread,
+            k => panic!(
+                "Unknown anchor kind: {} at line {}:{}",
+                k,
+                self.current_line(),
+                self.current_col()
+            ),
         }
-
-        let kind = match kind_ident.as_str() {
-            "main" => AnchorKind::Main,
-            "event" => {
-                self.expect(&Token::LParen);
-                let event_name = if let Token::StringLit(s) = self.current().clone() {
-                    self.advance(); s
-                } else { panic!("Expected event name string") };
-                self.expect(&Token::RParen);
-                AnchorKind::Event(event_name)
-            }
-            "thread"   => AnchorKind::Thread,
-            "on_error" => AnchorKind::OnError,
-            "timeout"  => {
-                self.expect(&Token::LParen);
-                let ms = if let Token::IntLit(n) = self.current().clone() {
-                    self.advance(); n as u64
-                } else { panic!("Expected timeout ms") };
-                self.expect(&Token::RParen);
-                AnchorKind::Timeout(ms)
-            }
-            k => panic!("Unknown anchor kind: {}", k),
-        };
-
-        let mut retry = None;
-        if self.current() == &Token::Comma {
-            self.advance();
-            let opt = self.eat_ident();
-            if opt == "retry" {
-                self.expect(&Token::LParen);
-                if let Token::IntLit(n) = self.current().clone() {
-                    self.advance();
-                    retry = Some(n as u32);
-                }
-                self.expect(&Token::RParen);
-            }
-        }
-
-        (kind, retry)
     }
 
     // 블록 내부 인라인 앵커 파싱 (들여쓰기 기반)
@@ -456,12 +503,12 @@ impl Parser {
         self.expect(&Token::At);
         let name = self.eat_ident();
         self.expect(&Token::LParen);
-        let (kind, retry) = self.parse_anchor_kind();
+        let kind = self.parse_anchor_kind();
         self.expect(&Token::RParen);
 
         let body = self.parse_indented_body(anchor_col);
 
-        (Stmt::InlineAnchor { name, kind, retry, body }, span)
+        (Stmt::InlineAnchor { name, kind, body }, span)
     }
 
     // 들여쓰기 기반 본문 파싱: anchor_col보다 더 들여쓴 구문만 포함
@@ -485,7 +532,7 @@ impl Parser {
         self.expect(&Token::At);
         let name = self.eat_ident();
         self.expect(&Token::LParen);
-        let (kind, retry) = self.parse_anchor_kind();
+        let kind = self.parse_anchor_kind();
         self.expect(&Token::RParen);
 
         // 본문 + 자식 앵커 (들여쓰기 기반)
@@ -506,7 +553,7 @@ impl Parser {
             }
         }
 
-        (TopLevel::Anchor { name, kind, retry, body, children }, span)
+        (TopLevel::Anchor { name, kind, body, children }, span)
     }
 
     // 함수 파싱
@@ -547,7 +594,12 @@ impl Parser {
                 Token::EOF      => break,
                 Token::At       => items.push(self.parse_anchor()),
                 Token::Function => items.push(self.parse_function()),
-                t => panic!("Unexpected top-level token: {:?}", t),
+                t => panic!(
+                    "Unexpected top-level token: {:?} at line {}:{}",
+                    t,
+                    self.current_line(),
+                    self.current_col()
+                ),
             }
         }
         Program { items }

@@ -60,13 +60,43 @@ struct VarInfo {
     is_vault: bool,
 }
 
-fn ty_name(ty: &Ty) -> &'static str {
+fn ty_name(ty: &Ty) -> String {
     match ty {
-        Ty::Int    => "int",
-        Ty::Float  => "float",
-        Ty::String => "string",
-        Ty::Bool   => "bool",
+        Ty::Int    => "int".to_string(),
+        Ty::Float  => "float".to_string(),
+        Ty::String => "string".to_string(),
+        Ty::Bool   => "bool".to_string(),
+        Ty::I8     => "i8".to_string(),
+        Ty::I16    => "i16".to_string(),
+        Ty::I32    => "i32".to_string(),
+        Ty::I64    => "i64".to_string(),
+        Ty::U8     => "u8".to_string(),
+        Ty::U16    => "u16".to_string(),
+        Ty::U32    => "u32".to_string(),
+        Ty::U64    => "u64".to_string(),
+        Ty::Array(inner) => format!("{}[]", ty_name(inner)),
     }
+}
+
+fn is_integer_ty(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64
+                | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+}
+
+fn is_numeric_ty(ty: &Ty) -> bool {
+    is_integer_ty(ty) || matches!(ty, Ty::Float)
+}
+
+/// 정수 리터럴(Ty::Int)은 모든 정수 타입에 대입 가능
+fn types_compatible(expected: &Ty, got: &Ty) -> bool {
+    if expected == got { return true; }
+    // int literal → 모든 정수 타입 허용
+    if *got == Ty::Int && is_integer_ty(expected) { return true; }
+    // i64 == int (별칭)
+    if (*expected == Ty::Int && *got == Ty::I64) || (*expected == Ty::I64 && *got == Ty::Int) {
+        return true;
+    }
+    false
 }
 
 pub struct Analyzer {
@@ -208,7 +238,7 @@ impl Analyzer {
             Stmt::VarDecl { ty, name: _, value } => {
                 let val_ty = self.infer_expr(value, scope);
                 if let Some(vt) = &val_ty {
-                    if vt != ty {
+                    if !types_compatible(ty, vt) {
                         self.err("E002",
                             format!("Type mismatch \u{2014} expected {}, got {}", ty_name(ty), ty_name(vt)),
                             format!("Change the value to type {}, or declare as {}", ty_name(ty), ty_name(vt)));
@@ -218,7 +248,7 @@ impl Analyzer {
             Stmt::VaultDecl { ty, name: _, value } => {
                 let val_ty = self.infer_expr(value, scope);
                 if let Some(vt) = &val_ty {
-                    if vt != ty {
+                    if !types_compatible(ty, vt) {
                         self.err("E002",
                             format!("Type mismatch in vault \u{2014} expected {}, got {}", ty_name(ty), ty_name(vt)),
                             format!("Change the value to type {}, or declare vault as {}", ty_name(ty), ty_name(vt)));
@@ -229,7 +259,7 @@ impl Analyzer {
                 if let Some(info) = scope.get(name) {
                     let val_ty = self.infer_expr(value, scope);
                     if let Some(vt) = &val_ty {
-                        if *vt != info.ty {
+                        if !types_compatible(&info.ty, vt) {
                             self.err("E003",
                                 format!("Cannot assign {} to '{}' (declared as {})", ty_name(vt), name, ty_name(&info.ty)),
                                 format!("Convert the value to {}, or change '{}' declaration", ty_name(&info.ty), name));
@@ -242,11 +272,45 @@ impl Analyzer {
                     self.infer_expr(value, scope);
                 }
             }
+            Stmt::IndexAssign { name, index, value } => {
+                if let Some(info) = scope.get(name) {
+                    if let Ty::Array(inner) = &info.ty {
+                        let idx_ty = self.infer_expr(index, scope);
+                        if let Some(ref it) = idx_ty {
+                            if *it != Ty::Int {
+                                self.err("E014",
+                                    format!("Array index must be int, got {}", ty_name(it)),
+                                    "Use an integer value for array indexing".into());
+                            }
+                        }
+                        let val_ty = self.infer_expr(value, scope);
+                        if let Some(ref vt) = val_ty {
+                            if !types_compatible(inner, vt) {
+                                self.err("E002",
+                                    format!("Type mismatch \u{2014} expected {}, got {}", ty_name(inner), ty_name(vt)),
+                                    format!("Array element type is {}", ty_name(inner)));
+                            }
+                        }
+                    } else {
+                        self.err("E015",
+                            format!("Cannot index into non-array type {}", ty_name(&info.ty)),
+                            "Only array types support indexing".into());
+                        self.infer_expr(index, scope);
+                        self.infer_expr(value, scope);
+                    }
+                } else {
+                    self.err("E004",
+                        format!("Undeclared variable '{}'", name),
+                        format!("Declare '{}' before use \u{2014} e.g. int[] {} = [...];", name, name));
+                    self.infer_expr(index, scope);
+                    self.infer_expr(value, scope);
+                }
+            }
             Stmt::CompoundAssign { name, value, .. } => {
                 if let Some(info) = scope.get(name) {
                     let val_ty = self.infer_expr(value, scope);
                     if let Some(vt) = &val_ty {
-                        if *vt != info.ty {
+                        if !types_compatible(&info.ty, vt) {
                             self.err("E003",
                                 format!("Cannot compound-assign {} to '{}' (declared as {})", ty_name(vt), name, ty_name(&info.ty)),
                                 format!("Ensure the right-hand side is type {}", ty_name(&info.ty)));
@@ -265,7 +329,7 @@ impl Analyzer {
             Stmt::Return(Some(e)) => {
                 let val_ty = self.infer_expr(e, scope);
                 if let (Some(expected), Some(got)) = (return_ty, &val_ty) {
-                    if got != *expected {
+                    if !types_compatible(expected, got) {
                         self.err("E005",
                             format!("Return type mismatch \u{2014} expected {}, got {}", ty_name(expected), ty_name(got)),
                             format!("Return a {} value, or change the function signature", ty_name(expected)));
@@ -384,10 +448,10 @@ impl Analyzer {
                 match op {
                     UnaryOpKind::Neg => {
                         if let Some(ref t) = inner {
-                            if *t != Ty::Int && *t != Ty::Float {
+                            if !is_numeric_ty(t) {
                                 self.err("E007",
                                     format!("Cannot negate type {}", ty_name(t)),
-                                    "Negation (-) only works on int and float".into());
+                                    "Negation (-) only works on numeric types".into());
                             }
                         }
                         inner
@@ -418,15 +482,15 @@ impl Analyzer {
                             }
                         }
                         if let (Some(ref l), Some(ref r)) = (&lt, &rt) {
-                            if l != r {
+                            if !types_compatible(l, r) && !types_compatible(r, l) {
                                 self.err("E008",
                                     format!("Arithmetic type mismatch \u{2014} {} vs {}", ty_name(l), ty_name(r)),
                                     "Both sides of an arithmetic operation must be the same numeric type".into());
                             }
-                            if *l != Ty::Int && *l != Ty::Float {
+                            if !is_numeric_ty(l) {
                                 self.err("E008",
                                     format!("Arithmetic on non-numeric type {}", ty_name(l)),
-                                    "Arithmetic operators (+, -, *, /, %) only work on int and float".into());
+                                    "Arithmetic operators (+, -, *, /, %) only work on numeric types".into());
                             }
                         }
                         lt
@@ -434,7 +498,7 @@ impl Analyzer {
                     BinOpKind::Lt | BinOpKind::Gt | BinOpKind::Le
                     | BinOpKind::Ge | BinOpKind::Eq | BinOpKind::Neq => {
                         if let (Some(ref l), Some(ref r)) = (&lt, &rt) {
-                            if l != r {
+                            if !types_compatible(l, r) && !types_compatible(r, l) {
                                 self.err("E009",
                                     format!("Comparison type mismatch \u{2014} {} vs {}", ty_name(l), ty_name(r)),
                                     "Both sides of a comparison must be the same type".into());
@@ -463,6 +527,25 @@ impl Analyzer {
             }
 
             Expr::Call { name, args } => {
+                // len() 빌트인
+                if name == "len" {
+                    if args.len() != 1 {
+                        self.err("E011",
+                            format!("'len' expects 1 argument, got {}", args.len()),
+                            "Usage: len(array)".into());
+                    } else {
+                        let arg_ty = self.infer_expr(&args[0], scope);
+                        if let Some(ref at) = arg_ty {
+                            if !matches!(at, Ty::Array(_)) {
+                                self.err("E015",
+                                    format!("'len' expects an array, got {}", ty_name(at)),
+                                    "Pass an array variable to len()".into());
+                            }
+                        }
+                    }
+                    return Some(Ty::Int);
+                }
+
                 if let Some(sig) = self.functions.get(name).cloned() {
                     if args.len() != sig.params.len() {
                         self.err("E011",
@@ -473,7 +556,7 @@ impl Analyzer {
                     for (i, arg) in args.iter().enumerate() {
                         let arg_ty = self.infer_expr(arg, scope);
                         if let (Some(ref at), Some(expected)) = (&arg_ty, sig.params.get(i)) {
-                            if at != expected {
+                            if !types_compatible(expected, at) {
                                 self.err("E012",
                                     format!("Arg {} of '{}' \u{2014} expected {}, got {}", i + 1, name, ty_name(expected), ty_name(at)),
                                     format!("Pass a {} value as argument {}", ty_name(expected), i + 1));
@@ -488,6 +571,49 @@ impl Analyzer {
                     self.err("E013",
                         format!("Undeclared function '{}'", name),
                         format!("Define '{}' with fn {}(...) {{ ... }}", name, name));
+                    None
+                }
+            }
+
+            Expr::ArrayLit(elems) => {
+                if elems.is_empty() {
+                    self.err("E016",
+                        "Empty array literal \u{2014} cannot infer element type".to_string(),
+                        "Provide at least one element, e.g. [0]".into());
+                    return None;
+                }
+                let first_ty = self.infer_expr(&elems[0], scope);
+                for (i, elem) in elems.iter().enumerate().skip(1) {
+                    let elem_ty = self.infer_expr(elem, scope);
+                    if let (Some(ref ft), Some(ref et)) = (&first_ty, &elem_ty) {
+                        if ft != et {
+                            self.err("E002",
+                                format!("Array element {} has type {}, expected {}", i, ty_name(et), ty_name(ft)),
+                                "All array elements must be the same type".into());
+                        }
+                    }
+                }
+                first_ty.map(|t| Ty::Array(Box::new(t)))
+            }
+
+            Expr::Index { array, index } => {
+                let arr_ty = self.infer_expr(array, scope);
+                let idx_ty = self.infer_expr(index, scope);
+                if let Some(ref it) = idx_ty {
+                    if *it != Ty::Int {
+                        self.err("E014",
+                            format!("Array index must be int, got {}", ty_name(it)),
+                            "Use an integer value for array indexing".into());
+                    }
+                }
+                if let Some(Ty::Array(inner)) = arr_ty {
+                    Some(*inner)
+                } else {
+                    if let Some(ref t) = arr_ty {
+                        self.err("E015",
+                            format!("Cannot index into non-array type {}", ty_name(t)),
+                            "Only array types support indexing".into());
+                    }
                     None
                 }
             }

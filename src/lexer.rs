@@ -128,12 +128,19 @@ impl Lexer {
             "break"    => Token::Break,
             "true"     => Token::True,
             "false"    => Token::False,
-            "alloc"    => Token::Alloc,
             "free"     => Token::Free,
             "int"      => Token::Int,
             "float"    => Token::Float,
             "string"   => Token::String,
             "bool"     => Token::Bool,
+            "i8"       => Token::TyI8,
+            "i16"      => Token::TyI16,
+            "i32"      => Token::TyI32,
+            "i64"      => Token::TyI64,
+            "u8"       => Token::TyU8,
+            "u16"      => Token::TyU16,
+            "u32"      => Token::TyU32,
+            "u64"      => Token::TyU64,
             _          => Token::Ident(s),
         }
     }
@@ -150,11 +157,12 @@ impl Lexer {
                 Some(ch) => {
                     let tok = match ch {
                         '@' => { self.advance(); Token::At }
-                        '#' => { self.advance(); Token::Hash }
                         '(' => { self.advance(); Token::LParen }
                         ')' => { self.advance(); Token::RParen }
                         '{' => { self.advance(); Token::LBrace }
                         '}' => { self.advance(); Token::RBrace }
+                        '[' => { self.advance(); Token::LBracket }
+                        ']' => { self.advance(); Token::RBracket }
                         ';' => { self.advance(); Token::Semicolon }
                         ',' => { self.advance(); Token::Comma }
                         '+' => {
@@ -226,7 +234,7 @@ impl Lexer {
                                 self.advance();
                                 Token::And
                             } else {
-                                continue;
+                                panic!("Unexpected character '&' at line {}:{} — did you mean '&&'?", start_line, start_col);
                             }
                         }
                         '|' => {
@@ -235,7 +243,7 @@ impl Lexer {
                                 self.advance();
                                 Token::Or
                             } else {
-                                continue;
+                                panic!("Unexpected character '|' at line {}:{} — did you mean '||'?", start_line, start_col);
                             }
                         }
                         '-' => {
@@ -265,14 +273,17 @@ impl Lexer {
                                 self.advance();
                                 Token::DotDot
                             } else {
-                                // 단독 . 은 일단 스킵
-                                continue;
+                                panic!("Unexpected character '.' at line {}:{} — did you mean '..'?", start_line, start_col);
                             }
                         }
                         '"' => self.read_string(),
                         c if c.is_ascii_digit() => self.read_number(),
                         c if c.is_alphabetic() || c == '_' => self.read_ident(),
-                        _ => { self.advance(); continue; }
+                        _ => {
+                            let c = ch;
+                            self.advance();
+                            panic!("Unexpected character '{}' at line {}:{}", c, start_line, start_col);
+                        }
                     };
                     tokens.push((tok, start_line, start_col));
                 }

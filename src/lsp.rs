@@ -175,8 +175,12 @@ fn analyze_text(text: &str) -> Vec<Diagnostic> {
                 .cloned()
                 .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "Syntax error".into());
+            let (line, character) = parse_panic_position(&msg).unwrap_or((0, 0));
             vec![Diagnostic {
-                range: Range::default(),
+                range: Range {
+                    start: Position { line, character },
+                    end: Position { line, character: character.saturating_add(1) },
+                },
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some("kyte".into()),
                 message: format!("Parse error: {}", msg),
@@ -184,6 +188,49 @@ fn analyze_text(text: &str) -> Vec<Diagnostic> {
             }]
         }
     }
+}
+
+fn parse_panic_position(msg: &str) -> Option<(u32, u32)> {
+    // panic 메시지 예시: "... at line 12:8"
+    let marker = "line ";
+    let start = msg.find(marker)? + marker.len();
+    let rest = &msg[start..];
+
+    let mut line_digits = String::new();
+    let mut idx = 0usize;
+    for ch in rest.chars() {
+        if ch.is_ascii_digit() {
+            line_digits.push(ch);
+            idx += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if line_digits.is_empty() {
+        return None;
+    }
+
+    let rest = &rest[idx..];
+    if !rest.starts_with(':') {
+        return None;
+    }
+    let rest = &rest[1..];
+
+    let mut col_digits = String::new();
+    for ch in rest.chars() {
+        if ch.is_ascii_digit() {
+            col_digits.push(ch);
+        } else {
+            break;
+        }
+    }
+    if col_digits.is_empty() {
+        return None;
+    }
+
+    let line_1: u32 = line_digits.parse().ok()?;
+    let col_0: u32 = col_digits.parse().ok()?;
+    Some((line_1.saturating_sub(1), col_0))
 }
 
 fn to_diagnostic(e: &CompileError) -> Diagnostic {
@@ -508,10 +555,12 @@ fn extract_doc_comment(src: &str, fn_line: usize) -> String {
                 line
             };
             result.push_str(stripped);
+            result.push('\n');
         } else {
             result.push_str(line);
+            // Markdown에서 줄바꿈이 유지되도록 hard line break 사용
+            result.push_str("  \n");
         }
-        result.push('\n');
     }
     if in_code {
         result.push_str("```\n");
@@ -520,12 +569,21 @@ fn extract_doc_comment(src: &str, fn_line: usize) -> String {
     result.trim_end().to_string()
 }
 
-fn ty_str(ty: &Ty) -> &'static str {
+fn ty_str(ty: &Ty) -> String {
     match ty {
-        Ty::Int => "int",
-        Ty::Float => "float",
-        Ty::String => "string",
-        Ty::Bool => "bool",
+        Ty::Int => "int".to_string(),
+        Ty::Float => "float".to_string(),
+        Ty::String => "string".to_string(),
+        Ty::Bool => "bool".to_string(),
+        Ty::I8  => "i8".to_string(),
+        Ty::I16 => "i16".to_string(),
+        Ty::I32 => "i32".to_string(),
+        Ty::I64 => "i64".to_string(),
+        Ty::U8  => "u8".to_string(),
+        Ty::U16 => "u16".to_string(),
+        Ty::U32 => "u32".to_string(),
+        Ty::U64 => "u64".to_string(),
+        Ty::Array(inner) => format!("{}[]", ty_str(inner)),
     }
 }
 
@@ -580,10 +638,18 @@ fn extract_fn_names(src: &str) -> Vec<(String, String)> {
 
 const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
     ("fn",     CompletionItemKind::KEYWORD,        "Function declaration"),
-    ("int",    CompletionItemKind::TYPE_PARAMETER,  "64-bit integer"),
+    ("int",    CompletionItemKind::TYPE_PARAMETER,  "64-bit signed integer (alias for i64)"),
     ("float",  CompletionItemKind::TYPE_PARAMETER,  "64-bit float"),
     ("string", CompletionItemKind::TYPE_PARAMETER,  "String type"),
     ("bool",   CompletionItemKind::TYPE_PARAMETER,  "Boolean type"),
+    ("i8",     CompletionItemKind::TYPE_PARAMETER,  "8-bit signed integer"),
+    ("i16",    CompletionItemKind::TYPE_PARAMETER,  "16-bit signed integer"),
+    ("i32",    CompletionItemKind::TYPE_PARAMETER,  "32-bit signed integer"),
+    ("i64",    CompletionItemKind::TYPE_PARAMETER,  "64-bit signed integer"),
+    ("u8",     CompletionItemKind::TYPE_PARAMETER,  "8-bit unsigned integer"),
+    ("u16",    CompletionItemKind::TYPE_PARAMETER,  "16-bit unsigned integer"),
+    ("u32",    CompletionItemKind::TYPE_PARAMETER,  "32-bit unsigned integer"),
+    ("u64",    CompletionItemKind::TYPE_PARAMETER,  "64-bit unsigned integer"),
     ("if",     CompletionItemKind::KEYWORD,        "Conditional"),
     ("else",   CompletionItemKind::KEYWORD,        "Alternative branch"),
     ("for",    CompletionItemKind::KEYWORD,        "Range loop"),

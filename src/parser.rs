@@ -110,6 +110,7 @@ impl Parser {
             Token::Print   => { self.advance(); "print".to_string() }
             Token::While   => { self.advance(); "while".to_string() }
             Token::As      => { self.advance(); "as".to_string() }
+            Token::Struct  => { self.advance(); "struct".to_string() }
             Token::Int      => { self.advance(); "int".to_string() }
             Token::Float    => { self.advance(); "float".to_string() }
             Token::String   => { self.advance(); "string".to_string() }
@@ -146,6 +147,7 @@ impl Parser {
             Token::TyU16  => { self.advance(); Ty::U16 }
             Token::TyU32  => { self.advance(); Ty::U32 }
             Token::TyU64  => { self.advance(); Ty::U64 }
+            Token::Ident(name) => { self.advance(); Ty::Struct(name) }
             t => panic!(
                 "Expected type but got {:?} at line {}:{}",
                 t,
@@ -265,8 +267,23 @@ impl Parser {
             Token::False        => { self.advance(); Expr::Bool(false) }
             Token::Ident(s)     => {
                 self.advance();
+                if self.current() == &Token::LBrace {
+                    self.advance();
+                    let mut fields = Vec::new();
+                    while self.current() != &Token::RBrace {
+                        let fname = self.eat_ident();
+                        self.expect(&Token::Colon);
+                        let fexpr = self.parse_expr();
+                        fields.push((fname, fexpr));
+                        if self.current() == &Token::Comma {
+                            self.advance();
+                        }
+                    }
+                    self.expect(&Token::RBrace);
+                    Expr::StructInit { name: s, fields }
+                }
                 // 함수 호출인지 확인
-                if self.current() == &Token::LParen {
+                else if self.current() == &Token::LParen {
                     self.advance();
                     let mut args = Vec::new();
                     while self.current() != &Token::RParen {
@@ -318,6 +335,11 @@ impl Parser {
                     self.advance();
                     let ty = self.parse_ty();
                     expr = Expr::Cast { expr: Box::new(expr), ty };
+                }
+                Token::Dot => {
+                    self.advance();
+                    let field = self.eat_ident();
+                    expr = Expr::FieldAccess { base: Box::new(expr), field };
                 }
                 _ => break,
             }
@@ -470,8 +492,26 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
+                // 구조체 타입 변수 선언: User u = User { ... };
+                if let Token::Ident(var_name) = self.current().clone() {
+                    let ty = Ty::Struct(name);
+                    self.advance();
+                    self.expect(&Token::Eq);
+                    let value = self.parse_expr();
+                    self.expect(&Token::Semicolon);
+                    Stmt::VarDecl { ty, name: var_name, value }
+                }
+                // 구조체 필드 대입: user.name = value;
+                else if self.current() == &Token::Dot {
+                    self.advance();
+                    let field = self.eat_ident();
+                    self.expect(&Token::Eq);
+                    let value = self.parse_expr();
+                    self.expect(&Token::Semicolon);
+                    Stmt::FieldAssign { name, field, value }
+                }
                 // 배열 인덱스 대입: arr[i] = 10;
-                if self.current() == &Token::LBracket {
+                else if self.current() == &Token::LBracket {
                     self.advance();
                     let index = self.parse_expr();
                     self.expect(&Token::RBracket);
@@ -666,6 +706,25 @@ impl Parser {
         (TopLevel::Function { name, params, return_ty, body }, span)
     }
 
+    // struct 선언 파싱
+    fn parse_struct(&mut self) -> (TopLevel, Span) {
+        let span = self.current_span();
+        self.expect(&Token::Struct);
+        let name = self.eat_ident();
+        self.expect(&Token::LBrace);
+
+        let mut fields = Vec::new();
+        while self.current() != &Token::RBrace {
+            let ty = self.parse_ty();
+            let fname = self.eat_ident();
+            self.expect(&Token::Semicolon);
+            fields.push(StructField { ty, name: fname });
+        }
+        self.expect(&Token::RBrace);
+
+        (TopLevel::Struct { name, fields }, span)
+    }
+
     // 전체 파싱
     pub fn parse(&mut self) -> Program {
         let mut items = Vec::new();
@@ -675,6 +734,7 @@ impl Parser {
                 Token::Hash     => self.skip_decorator(),
                 Token::At       => items.push(self.parse_anchor()),
                 Token::Function => items.push(self.parse_function()),
+                Token::Struct   => items.push(self.parse_struct()),
                 t => panic!(
                     "Unexpected top-level token: {:?} at line {}:{}",
                     t,

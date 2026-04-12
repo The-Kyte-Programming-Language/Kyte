@@ -24,6 +24,7 @@ pub enum Token {
     Print,        // print
     While,        // while
     As,           // as
+    Struct,       // struct
 
     // 타입
     Int,          // int
@@ -56,6 +57,8 @@ pub enum Token {
     RBracket,     // ]
     Semicolon,    // ;
     Comma,        // ,
+    Colon,        // :
+    Dot,          // .
     Eq,           // =
     EqEq,         // ==
     Neq,          // !=
@@ -115,6 +118,7 @@ pub enum Ty {
     U32,
     U64,
     Array(Box<Ty>),  // int[], u8[], etc.
+    Struct(String),
 }
 
 // 표현식
@@ -149,6 +153,14 @@ pub enum Expr {
     Cast {
         expr: Box<Expr>,
         ty:   Ty,
+    },
+    StructInit {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
+    FieldAccess {
+        base: Box<Expr>,
+        field: String,
     },
 }
 
@@ -189,6 +201,12 @@ pub enum Stmt {
     IndexAssign {
         name:  String,
         index: Expr,
+        value: Expr,
+    },
+    // user.name = "a";
+    FieldAssign {
+        name: String,
+        field: String,
         value: Expr,
     },
     // x += 10;  x -= 5;  etc.
@@ -248,6 +266,12 @@ pub struct Param {
     pub name: String,
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct StructField {
+    pub ty: Ty,
+    pub name: String,
+}
+
 // 최상위 선언
 #[derive(Debug, PartialEq, Clone)]
 pub enum TopLevel {
@@ -264,6 +288,10 @@ pub enum TopLevel {
         params:     Vec<Param>,
         return_ty:  Option<Ty>,
         body:       Vec<(Stmt, Span)>,
+    },
+    Struct {
+        name: String,
+        fields: Vec<StructField>,
     },
 }
 

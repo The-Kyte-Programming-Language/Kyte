@@ -157,8 +157,30 @@ fn send_diagnostics(
     Ok(())
 }
 
+fn is_import_line(line: &str) -> bool {
+    let t = line.trim();
+    if !t.starts_with("import") {
+        return false;
+    }
+    let rest = t["import".len()..].trim_start();
+    rest.starts_with('"') && rest.ends_with("\";")
+}
+
+fn preprocess_source(src: &str) -> String {
+    let mut out = String::new();
+    for line in src.lines() {
+        if is_import_line(line) {
+            out.push('\n');
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn analyze_text(text: &str) -> Vec<Diagnostic> {
-    let src = text.to_string();
+    let src = preprocess_source(text);
     let result = catch_unwind(AssertUnwindSafe(|| {
         let mut lex = Lexer::new(&src);
         let tokens = lex.tokenize();
@@ -325,6 +347,14 @@ fn add(int a, int b) -> int {\n\
     return a + b;\n\
 }\n\
 ```",
+        "struct" => "\
+**struct** — user-defined data type\n\n\
+```kyte\n\
+struct User {\n\
+    string name;\n\
+    int age;\n\
+}\n\
+```",
         "Vault" => "\
 **Vault** — managed-memory declaration (heap-allocated)\n\n\
 ```kyte\n\
@@ -433,6 +463,14 @@ bool done = false;\n\
 int x = 42;\n\
 float y = x as float;\n\
 ```",
+        "import" => "\
+    **import** — include another Kyte source file\n\n\
+    ```kyte\n\
+    import \"util.ky\";\n\
+    @main(main) {\n\
+        print(add(1, 2));\n\
+    }\n\
+    ```",
         "free" => "\
 **free(name)** — release Vault memory\n\n\
 ```kyte\n\
@@ -445,7 +483,7 @@ free(buf);\n\
 }
 
 fn symbol_hover(text: &str, word: &str) -> Option<String> {
-    let src = text.to_string();
+    let src = preprocess_source(text);
     let r = catch_unwind(AssertUnwindSafe(|| -> Option<String> {
         let mut lex = Lexer::new(&src);
         let tokens = lex.tokenize();
@@ -464,12 +502,9 @@ fn symbol_hover(text: &str, word: &str) -> Option<String> {
                         .map(|t| format!(" -> {}", ty_str(t)))
                         .unwrap_or_default();
 
-                    eprintln!("[kyte-lsp] hover: fn={}, span.line={}", name, span.line);
                     let doc = extract_doc_comment(&src, span.line);
-                    eprintln!("[kyte-lsp] doc comment = {:?}", doc);
                     let sig = format!("```kyte\nfn {}({}){}\n```", name, ps.join(", "), ret);
                     let hover_md = format_with_doc(&sig, &doc);
-                    eprintln!("[kyte-lsp] hover markdown:\n{}", hover_md);
                     return Some(hover_md);
                 }
                 TopLevel::Anchor { name, kind, .. } if name == word => {
@@ -605,6 +640,7 @@ fn ty_str(ty: &Ty) -> String {
         Ty::U32 => "u32".to_string(),
         Ty::U64 => "u64".to_string(),
         Ty::Array(inner) => format!("{}[]", ty_str(inner)),
+        Ty::Struct(name) => name.clone(),
     }
 }
 
@@ -642,7 +678,8 @@ fn compute_completions(text: Option<&str>) -> CompletionList {
 }
 
 fn extract_fn_names(src: &str) -> Vec<(String, String)> {
-    let mut lex = Lexer::new(src);
+    let src = preprocess_source(src);
+    let mut lex = Lexer::new(&src);
     let tokens = lex.tokenize();
     let mut par = Parser::new(tokens);
     let ast = par.parse();
@@ -659,6 +696,7 @@ fn extract_fn_names(src: &str) -> Vec<(String, String)> {
 
 const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
     ("fn",     CompletionItemKind::KEYWORD,        "Function declaration"),
+    ("struct", CompletionItemKind::KEYWORD,        "Struct type declaration"),
     ("int",    CompletionItemKind::TYPE_PARAMETER,  "64-bit signed integer (alias for i64)"),
     ("float",  CompletionItemKind::TYPE_PARAMETER,  "64-bit float"),
     ("string", CompletionItemKind::TYPE_PARAMETER,  "String type"),
@@ -683,6 +721,7 @@ const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
     ("free",   CompletionItemKind::FUNCTION,       "Release Vault memory"),
     ("print",  CompletionItemKind::FUNCTION,       "Print values to stdout"),
     ("as",     CompletionItemKind::KEYWORD,        "Type cast: expr as type"),
+    ("import", CompletionItemKind::KEYWORD,        "Import another .ky source file"),
     ("Kill",   CompletionItemKind::KEYWORD,        "Terminate anchor with recovery"),
     ("Exit",   CompletionItemKind::KEYWORD,        "Exit program"),
     ("true",   CompletionItemKind::CONSTANT,       "Boolean true"),

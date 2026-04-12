@@ -132,6 +132,7 @@ impl Lexer {
             "free"     => Token::Free,
             "print"    => Token::Print,
             "as"       => Token::As,
+            "struct"   => Token::Struct,
             "int"      => Token::Int,
             "float"    => Token::Float,
             "string"   => Token::String,
@@ -169,6 +170,7 @@ impl Lexer {
                         ']' => { self.advance(); Token::RBracket }
                         ';' => { self.advance(); Token::Semicolon }
                         ',' => { self.advance(); Token::Comma }
+                        ':' => { self.advance(); Token::Colon }
                         '+' => {
                             self.advance();
                             if self.current() == Some('=') {
@@ -277,7 +279,7 @@ impl Lexer {
                                 self.advance();
                                 Token::DotDot
                             } else {
-                                panic!("Unexpected character '.' at line {}:{} — did you mean '..'?", start_line, start_col);
+                                Token::Dot
                             }
                         }
                         '"' => self.read_string(),

@@ -105,6 +105,7 @@ fn ty_name(ty: &Ty) -> String {
         Ty::U32    => "u32".to_string(),
         Ty::U64    => "u64".to_string(),
         Ty::Array(inner) => format!("{}[]", ty_name(inner)),
+        Ty::Struct(name) => name.clone(),
     }
 }
 
@@ -132,6 +133,7 @@ fn types_compatible(expected: &Ty, got: &Ty) -> bool {
 pub struct Analyzer {
     errors:       Vec<CompileError>,
     functions:    HashMap<String, FnSig>,
+    structs:      HashMap<String, Vec<StructField>>,
     source_lines: Vec<String>,
     current_span: Span,
     in_anchor:    bool,
@@ -183,6 +185,7 @@ impl Analyzer {
         let mut a = Analyzer {
             errors: Vec::new(),
             functions: HashMap::new(),
+            structs: HashMap::new(),
             source_lines,
             current_span: Span { line: 0, col: 0 },
             in_anchor: false,
@@ -227,6 +230,18 @@ impl Analyzer {
 
         // 1: collect function signatures + duplicate check
         for (item, item_span) in &program.items {
+            if let TopLevel::Struct { name, fields } = item {
+                if a.structs.contains_key(name) {
+                    a.current_span = *item_span;
+                    a.err(
+                        "E025",
+                        format!("Duplicate struct '{}'", name),
+                        format!("Remove or rename one of the '{}' definitions", name),
+                    );
+                } else {
+                    a.structs.insert(name.clone(), fields.clone());
+                }
+            }
             if let TopLevel::Function { name, params, return_ty, .. } = item {
                 let sig = FnSig {
                     params: params.iter().map(|p| p.ty.clone()).collect(),
@@ -256,6 +271,7 @@ impl Analyzer {
                     }
                     a.check_stmts(body, &mut scope, return_ty.as_ref(), name);
                 }
+                TopLevel::Struct { .. } => {}
             }
         }
 
@@ -333,6 +349,15 @@ impl Analyzer {
     ) {
         match stmt {
             Stmt::VarDecl { ty, name: _, value } => {
+                if let Ty::Struct(sname) = ty {
+                    if !self.structs.contains_key(sname) {
+                        self.err(
+                            "E026",
+                            format!("Unknown struct type '{}'", sname),
+                            format!("Declare 'struct {} {{ ... }}' before using it", sname),
+                        );
+                    }
+                }
                 let val_ty = self.infer_expr(value, scope);
                 if let Some(vt) = &val_ty {
                     if !types_compatible(ty, vt) {
@@ -343,6 +368,15 @@ impl Analyzer {
                 }
             }
             Stmt::VaultDecl { ty, name: _, value } => {
+                if let Ty::Struct(sname) = ty {
+                    if !self.structs.contains_key(sname) {
+                        self.err(
+                            "E026",
+                            format!("Unknown struct type '{}'", sname),
+                            format!("Declare 'struct {} {{ ... }}' before using it", sname),
+                        );
+                    }
+                }
                 let val_ty = self.infer_expr(value, scope);
                 if let Some(vt) = &val_ty {
                     if !types_compatible(ty, vt) {
@@ -400,6 +434,50 @@ impl Analyzer {
                         format!("Undeclared variable '{}'", name),
                         format!("Declare '{}' before use \u{2014} e.g. int[] {} = [...];", name, name));
                     self.infer_expr(index, scope);
+                    self.infer_expr(value, scope);
+                }
+            }
+            Stmt::FieldAssign { name, field, value } => {
+                if let Some(info) = scope.get(name) {
+                    if let Ty::Struct(sname) = &info.ty {
+                        if let Some(fields) = self.structs.get(sname) {
+                            if let Some(sf) = fields.iter().find(|f| f.name == *field) {
+                                let expected_ty = sf.ty.clone();
+                                let val_ty = self.infer_expr(value, scope);
+                                if let Some(vt) = &val_ty {
+                                    if !types_compatible(&expected_ty, vt) {
+                                        self.err(
+                                            "E002",
+                                            format!(
+                                                "Type mismatch for field '{}.{}' — expected {}, got {}",
+                                                name,
+                                                field,
+                                                ty_name(&expected_ty),
+                                                ty_name(vt)
+                                            ),
+                                            format!("Field '{}.{}' type is {}", name, field, ty_name(&expected_ty)),
+                                        );
+                                    }
+                                }
+                            } else {
+                                self.err(
+                                    "E027",
+                                    format!("Struct '{}' has no field '{}'", sname, field),
+                                    "Check the struct declaration for available fields".to_string(),
+                                );
+                                self.infer_expr(value, scope);
+                            }
+                        }
+                    } else {
+                        self.err(
+                            "E028",
+                            format!("Cannot assign field '{}.{}' on non-struct type {}", name, field, ty_name(&info.ty)),
+                            "Field assignment requires a struct variable".to_string(),
+                        );
+                        self.infer_expr(value, scope);
+                    }
+                } else {
+                    self.err_undeclared_var(name, scope);
                     self.infer_expr(value, scope);
                 }
             }
@@ -803,6 +881,89 @@ impl Analyzer {
                     }
                 }
                 Some(target_ty.clone())
+            }
+            Expr::StructInit { name, fields } => {
+                if let Some(def_fields) = self.structs.get(name).cloned() {
+                    for df in &def_fields {
+                        if !fields.iter().any(|(fname, _)| fname == &df.name) {
+                            self.err(
+                                "E029",
+                                format!("Missing field '{}' in struct init '{}'", df.name, name),
+                                format!("Provide '{}: ...' in {} {{ ... }}", df.name, name),
+                            );
+                        }
+                    }
+                    for (fname, fexpr) in fields {
+                        if let Some(df) = def_fields.iter().find(|f| f.name == *fname) {
+                            let got = self.infer_expr(fexpr, scope);
+                            if let Some(gt) = got {
+                                if !types_compatible(&df.ty, &gt) {
+                                    self.err(
+                                        "E002",
+                                        format!(
+                                            "Type mismatch for field '{}.{}' — expected {}, got {}",
+                                            name,
+                                            fname,
+                                            ty_name(&df.ty),
+                                            ty_name(&gt)
+                                        ),
+                                        format!("Field '{}.{}' type is {}", name, fname, ty_name(&df.ty)),
+                                    );
+                                }
+                            }
+                        } else {
+                            self.err(
+                                "E027",
+                                format!("Struct '{}' has no field '{}'", name, fname),
+                                "Check the struct declaration for available fields".to_string(),
+                            );
+                            self.infer_expr(fexpr, scope);
+                        }
+                    }
+                } else {
+                    self.err(
+                        "E026",
+                        format!("Unknown struct type '{}'", name),
+                        format!("Declare 'struct {} {{ ... }}' before using it", name),
+                    );
+                    for (_, fexpr) in fields {
+                        self.infer_expr(fexpr, scope);
+                    }
+                }
+                Some(Ty::Struct(name.clone()))
+            }
+            Expr::FieldAccess { base, field } => {
+                let bt = self.infer_expr(base, scope);
+                if let Some(Ty::Struct(sname)) = bt {
+                    if let Some(fields) = self.structs.get(&sname) {
+                        if let Some(sf) = fields.iter().find(|f| f.name == *field) {
+                            Some(sf.ty.clone())
+                        } else {
+                            self.err(
+                                "E027",
+                                format!("Struct '{}' has no field '{}'", sname, field),
+                                "Check the struct declaration for available fields".to_string(),
+                            );
+                            None
+                        }
+                    } else {
+                        self.err(
+                            "E026",
+                            format!("Unknown struct type '{}'", sname),
+                            format!("Declare 'struct {} {{ ... }}' before using it", sname),
+                        );
+                        None
+                    }
+                } else {
+                    if let Some(t) = bt {
+                        self.err(
+                            "E028",
+                            format!("Cannot access field '{}' on non-struct type {}", field, ty_name(&t)),
+                            "Field access requires a struct value".to_string(),
+                        );
+                    }
+                    None
+                }
             }
         }
     }

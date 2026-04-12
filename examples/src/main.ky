@@ -1,0 +1,21 @@
+/// Kyte example entry point
+struct User {
+    string name;
+    int age;
+}
+
+@main(main) {
+    User u = User { name: "kyte", age: 3 };
+    print(u.name);
+    print(u.age);
+
+    int i = 0;
+    while i < 3 {
+        print(i);
+        i += 1;
+    }
+
+    int x = 42;
+    float y = x as float;
+    print(y);
+}

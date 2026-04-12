@@ -1,5 +1,12 @@
-import "util.ky";
+struct User {
+    string name;
+    int age;
+}
+
 @main(main) {
-    int x = add(2, 3);
-    print(x);
+    User u = User { name: "kyte", age: 3 };
+    print(u.name);
+    print(u.age);
+    u.age = 4;
+    print(u.age);
 }

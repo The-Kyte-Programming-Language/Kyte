@@ -2,6 +2,7 @@ use crate::ast::*;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
+use inkwell::types::StructType;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::IntPredicate;
@@ -24,6 +25,8 @@ pub struct Codegen<'ctx> {
     var_types: HashMap<String, Ty>,
     functions: HashMap<String, FunctionValue<'ctx>>,
     fn_return_tys: HashMap<String, Option<Ty>>,
+    struct_defs: HashMap<String, Vec<StructField>>,
+    struct_types: HashMap<String, StructType<'ctx>>,
 
     /// 배열 길이 추적
     array_lengths: HashMap<String, u64>,
@@ -63,6 +66,8 @@ impl<'ctx> Codegen<'ctx> {
             var_types: HashMap::new(),
             functions: HashMap::new(),
             fn_return_tys: HashMap::new(),
+            struct_defs: HashMap::new(),
+            struct_types: HashMap::new(),
             array_lengths: HashMap::new(),
             vault_vars: std::collections::HashSet::new(),
             break_bb: None,
@@ -106,6 +111,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Bool          => self.bool_type().into(),
             Ty::String        => self.ptr_type().into(),
             Ty::Array(_)      => self.ptr_type().into(),
+            Ty::Struct(name)  => self.struct_types[name].into(),
         }
     }
 
@@ -132,6 +138,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Bool           => self.bool_type().into(),
             Ty::String         => self.ptr_type().into(),
             Ty::Array(_)       => self.ptr_type().into(),
+            Ty::Struct(name)   => self.struct_types[name].into(),
         }
     }
 
@@ -213,7 +220,18 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Int | Ty::I64 | Ty::U64 => 8,
             Ty::Float => 8,
             Ty::String | Ty::Array(_) => 8, // pointer size
+            Ty::Struct(_) => 8,
         }
+    }
+
+    fn struct_field_info(&self, sname: &str, field: &str) -> Option<(u32, Ty)> {
+        let fields = self.struct_defs.get(sname)?;
+        for (idx, f) in fields.iter().enumerate() {
+            if f.name == field {
+                return Some((idx as u32, f.ty.clone()));
+            }
+        }
+        None
     }
 
     fn store_var(&self, name: &str, val: BasicValueEnum<'ctx>) {
@@ -264,6 +282,21 @@ impl<'ctx> Codegen<'ctx> {
         self.declare_malloc();
         self.declare_free_fn();
         self.declare_strcmp();
+
+        // 0단계: struct 타입 선언/본문 설정
+        for (item, _) in &program.items {
+            if let TopLevel::Struct { name, fields } = item {
+                let st = self.context.opaque_struct_type(name);
+                self.struct_types.insert(name.clone(), st);
+                self.struct_defs.insert(name.clone(), fields.clone());
+            }
+        }
+        for (name, fields) in self.struct_defs.clone() {
+            if let Some(st) = self.struct_types.get(&name).copied() {
+                let field_types: Vec<_> = fields.iter().map(|f| self.ty_to_basic(&f.ty)).collect();
+                st.set_body(&field_types, false);
+            }
+        }
 
         // 1단계: 함수 프로토타입 선언
         for (item, _) in &program.items {
@@ -572,6 +605,22 @@ impl<'ctx> Codegen<'ctx> {
                     };
                     let val = self.compile_expr(value, params);
                     self.builder.build_store(gep, val).unwrap();
+                }
+            }
+
+            Stmt::FieldAssign { name, field, value } => {
+                let ty = self.guess_var_ty(name, params);
+                if let Ty::Struct(sname) = ty {
+                    if let Some((idx, field_ty)) = self.struct_field_info(&sname, field) {
+                        let base_ptr = self.variables[name];
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(self.struct_types[&sname], base_ptr, idx, "field_ptr")
+                            .unwrap();
+                        let val = self.compile_expr(value, params);
+                        let val = self.coerce_to_ty(val, &field_ty);
+                        self.builder.build_store(field_ptr, val).unwrap();
+                    }
                 }
             }
 
@@ -1041,6 +1090,39 @@ impl<'ctx> Codegen<'ctx> {
                 let src_ty = self.guess_expr_ty(expr, params);
                 self.build_cast(val, &src_ty, target_ty)
             }
+            Expr::StructInit { name, fields } => {
+                let st = self.struct_types[name];
+                let mut agg = st.get_undef();
+                if let Some(defs) = self.struct_defs.get(name).cloned() {
+                    for (idx, df) in defs.iter().enumerate() {
+                        let value = if let Some((_, expr)) = fields.iter().find(|(fname, _)| *fname == df.name) {
+                            let v = self.compile_expr(expr, params);
+                            self.coerce_to_ty(v, &df.ty)
+                        } else {
+                            self.ty_to_basic(&df.ty).const_zero()
+                        };
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, value, idx as u32, "struct_set")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                }
+                agg.into()
+            }
+            Expr::FieldAccess { base, field } => {
+                let bt = self.guess_expr_ty(base, params);
+                if let Ty::Struct(sname) = bt {
+                    if let Some((idx, field_ty)) = self.struct_field_info(&sname, field) {
+                        let struct_val = self.compile_expr(base, params).into_struct_value();
+                        return self
+                            .builder
+                            .build_extract_value(struct_val, idx, "field_get")
+                            .unwrap_or_else(|_| self.ty_to_basic(&field_ty).const_zero().into());
+                    }
+                }
+                self.i64_type().const_int(0, false).into()
+            }
         }
     }
 
@@ -1373,6 +1455,16 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             Expr::Cast { ty, .. } => ty.clone(),
+            Expr::StructInit { name, .. } => Ty::Struct(name.clone()),
+            Expr::FieldAccess { base, field } => {
+                if let Ty::Struct(sname) = self.guess_expr_ty(base, params) {
+                    self.struct_field_info(&sname, field)
+                        .map(|(_, t)| t)
+                        .unwrap_or(Ty::Int)
+                } else {
+                    Ty::Int
+                }
+            }
         }
     }
 

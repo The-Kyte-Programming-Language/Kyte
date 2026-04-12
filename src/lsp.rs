@@ -310,13 +310,13 @@ float r = pi * 2.0;\n\
 **string** — UTF-8 string type\n\n\
 ```kyte\n\
 string name = \"world\";\n\
-yield \"Hello, \" + name;\n\
+print(\"Hello, \" + name);\n\
 ```",
         "bool" => "\
 **bool** — boolean type\n\n\
 ```kyte\n\
 bool flag = true;\n\
-if flag { yield 1; }\n\
+if flag { print(1); }\n\
 ```",
         "fn" | "function" => "\
 **fn** — declare a function\n\n\
@@ -333,11 +333,18 @@ Vault int buffer = 1024;\n\
 free(buffer);\n\
 ```",
         "yield" => "\
-**yield** — output a value (print)\n\n\
+**yield** — transfer data out of an anchor\n\n\
 ```kyte\n\
-yield 42;\n\
-yield \"hello\";\n\
-yield x + y;\n\
+@producer() {\n\
+    yield 42;\n\
+}\n\
+```",
+        "print" => "\
+**print(...)** — print values to stdout\n\n\
+```kyte\n\
+print(42);\n\
+print(\"hello\");\n\
+print(x + y);\n\
 ```",
         "kill" | "Kill" => "\
 **Kill** — terminate the current anchor with recovery\n\n\
@@ -364,18 +371,18 @@ fn double(int n) -> int {\n\
 **if** — conditional branch\n\n\
 ```kyte\n\
 if x > 10 {\n\
-    yield \"big\";\n\
+    print(\"big\");\n\
 } else {\n\
-    yield \"small\";\n\
+    print(\"small\");\n\
 }\n\
 ```",
         "else" => "\
 **else** — alternative branch\n\n\
 ```kyte\n\
 if x > 0 {\n\
-    yield \"positive\";\n\
+    print(\"positive\");\n\
 } else {\n\
-    yield \"non-positive\";\n\
+    print(\"non-positive\");\n\
 }\n\
 ```",
         "loop" => "\
@@ -400,7 +407,7 @@ while i < 10 {\n\
 **for** — range-based loop\n\n\
 ```kyte\n\
 for i in 0..5 {\n\
-    yield i;  // 0, 1, 2, 3, 4\n\
+    print(i);  // 0, 1, 2, 3, 4\n\
 }\n\
 ```",
         "break" => "\
@@ -427,9 +434,9 @@ int x = 42;\n\
 float y = x as float;\n\
 ```",
         "free" => "\
-**free(name)** — release vault memory\n\n\
+**free(name)** — release Vault memory\n\n\
 ```kyte\n\
-vault int buf = 512;\n\
+Vault int buf = 512;\n\
 free(buf);\n\
 ```",
         _ => return None,
@@ -671,15 +678,12 @@ const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
     ("while",  CompletionItemKind::KEYWORD,        "Conditional loop"),
     ("break",  CompletionItemKind::KEYWORD,        "Exit loop"),
     ("return", CompletionItemKind::KEYWORD,        "Return value"),
-    ("yield",  CompletionItemKind::KEYWORD,        "Output value"),
-    ("vault",  CompletionItemKind::KEYWORD,        "Managed memory (Vault)"),
-    ("Vault",  CompletionItemKind::KEYWORD,        "Managed memory"),
-    ("free",   CompletionItemKind::KEYWORD,        "Release memory"),
+    ("yield",  CompletionItemKind::KEYWORD,        "Transfer data out of anchor"),
+    ("Vault",  CompletionItemKind::KEYWORD,        "Managed heap memory"),
+    ("free",   CompletionItemKind::FUNCTION,       "Release Vault memory"),
     ("print",  CompletionItemKind::FUNCTION,       "Print values to stdout"),
-    ("as",     CompletionItemKind::KEYWORD,        "Type casting"),
-    ("kill",   CompletionItemKind::KEYWORD,        "Terminate anchor (Kill)"),
-    ("Kill",   CompletionItemKind::KEYWORD,        "Terminate anchor"),
-    ("exit",   CompletionItemKind::KEYWORD,        "Exit program (Exit)"),
+    ("as",     CompletionItemKind::KEYWORD,        "Type cast: expr as type"),
+    ("Kill",   CompletionItemKind::KEYWORD,        "Terminate anchor with recovery"),
     ("Exit",   CompletionItemKind::KEYWORD,        "Exit program"),
     ("true",   CompletionItemKind::CONSTANT,       "Boolean true"),
     ("false",  CompletionItemKind::CONSTANT,       "Boolean false"),

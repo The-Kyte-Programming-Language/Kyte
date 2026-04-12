@@ -318,14 +318,14 @@ print(\"Hello, \" + name);\n\
 bool flag = true;\n\
 if flag { print(1); }\n\
 ```",
-        "fn" | "function" => "\
+        "fn" => "\
 **fn** — declare a function\n\n\
 ```kyte\n\
 fn add(int a, int b) -> int {\n\
     return a + b;\n\
 }\n\
 ```",
-        "vault" | "Vault" => "\
+        "Vault" => "\
 **Vault** — managed-memory declaration (heap-allocated)\n\n\
 ```kyte\n\
 Vault int buffer = 1024;\n\
@@ -346,14 +346,14 @@ print(42);\n\
 print(\"hello\");\n\
 print(x + y);\n\
 ```",
-        "kill" | "Kill" => "\
+        "Kill" => "\
 **Kill** — terminate the current anchor with recovery\n\n\
 ```kyte\n\
 @handler() {\n\
     Kill \"error occurred\";\n\
 }\n\
 ```",
-        "exit" | "Exit" => "\
+        "Exit" => "\
 **Exit** — exit the entire program\n\n\
 ```kyte\n\
 if error {\n\

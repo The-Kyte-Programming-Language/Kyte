@@ -15,6 +15,36 @@ pub enum Severity {
     Warning,
 }
 
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut dp: Vec<usize> = (0..=b_chars.len()).collect();
+    for (i, ca) in a_chars.iter().enumerate() {
+        let mut prev = dp[0];
+        dp[0] = i + 1;
+        for (j, cb) in b_chars.iter().enumerate() {
+            let tmp = dp[j + 1];
+            let cost = if ca == cb { 0 } else { 1 };
+            dp[j + 1] = (dp[j + 1] + 1).min(dp[j] + 1).min(prev + cost);
+            prev = tmp;
+        }
+    }
+    dp[b_chars.len()]
+}
+
+fn nearest_name<'a>(target: &str, candidates: impl Iterator<Item = &'a String>) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for c in candidates {
+        let d = levenshtein(target, c);
+        if d <= 2 {
+            match &best {
+                Some((best_d, _)) if d >= *best_d => {}
+                _ => best = Some((d, c.clone())),
+            }
+        }
+    }
+    best.map(|(_, s)| s)
+}
 #[derive(Clone, Debug)]
 pub struct CompileError {
     pub code:        &'static str,
@@ -130,6 +160,24 @@ impl Analyzer {
         });
     }
 
+    fn err_undeclared_var(&mut self, name: &str, scope: &HashMap<String, VarInfo>) {
+        let hint = if let Some(similar) = nearest_name(name, scope.keys()) {
+            format!("Did you mean '{}' ?", similar)
+        } else {
+            format!("Declare '{}' before use ??e.g. int {} = ...;", name, name)
+        };
+        self.err("E004", format!("Undeclared variable '{}'", name), hint);
+    }
+
+    fn err_undeclared_fn(&mut self, name: &str) {
+        let hint = if let Some(similar) = nearest_name(name, self.functions.keys()) {
+            format!("Did you mean '{}' ?", similar)
+        } else {
+            format!("Define '{}' with fn {}(...) {{ ... }}", name, name)
+        };
+        self.err("E013", format!("Undeclared function '{}'", name), hint);
+    }
+
     pub fn analyze(program: &Program, source: &str) -> Vec<CompileError> {
         let source_lines: Vec<String> = source.lines().map(String::from).collect();
         let mut a = Analyzer {
@@ -140,7 +188,7 @@ impl Analyzer {
             in_anchor: false,
         };
 
-        // 0: main 앵커 존재/중복 검사 (top-level)
+        // 0: main ?듭빱 議댁옱/以묐났 寃??(top-level)
         let mut main_count = 0usize;
         let mut first_item_span: Option<Span> = None;
         for (item, item_span) in &program.items {
@@ -150,13 +198,23 @@ impl Analyzer {
             if let TopLevel::Anchor { kind: AnchorKind::Main, .. } = item {
                 main_count += 1;
             }
+            if let TopLevel::Anchor { name, kind: AnchorKind::Main, .. } = item {
+                if name != "main" {
+                    a.current_span = *item_span;
+                    a.err(
+                        "E022",
+                        format!("Main anchor name must be '@main(main)', got '@{}(main)'", name),
+                        "Rename the anchor to @main(main)".to_string(),
+                    );
+                }
+            }
         }
         if main_count == 0 {
             a.current_span = first_item_span.unwrap_or(Span { line: 1, col: 0 });
             a.err(
                 "E018",
                 "Missing @...(main) anchor".to_string(),
-                "Add a top-level main anchor, e.g. @app(main)".to_string(),
+                "Add a top-level main anchor, e.g. @main(main)".to_string(),
             );
         } else if main_count > 1 {
             a.current_span = first_item_span.unwrap_or(Span { line: 1, col: 0 });
@@ -205,7 +263,14 @@ impl Analyzer {
     }
 
     fn check_anchor(&mut self, anchor: &TopLevel, _anchor_span: Span, inherited: &HashMap<String, VarInfo>) {
-        if let TopLevel::Anchor { body, children, .. } = anchor {
+        if let TopLevel::Anchor { kind, body, children, .. } = anchor {
+            if matches!(kind, AnchorKind::Thread | AnchorKind::Event(_)) {
+                self.err(
+                    "E024",
+                    format!("Anchor kind '{:?}' is parsed but not implemented", kind),
+                    "Use plain @name() or @main(main) until runtime semantics are implemented".to_string(),
+                );
+            }
             let saved = self.in_anchor;
             self.in_anchor = true;
             let mut scope = inherited.clone();
@@ -355,8 +420,26 @@ impl Analyzer {
                     self.infer_expr(value, scope);
                 }
             }
-            Stmt::Kill(Some(e)) => { self.infer_expr(e, scope); }
-            Stmt::Kill(None) | Stmt::Exit | Stmt::Break => {}
+            Stmt::Kill(Some(e)) => {
+                if !self.in_anchor {
+                    self.err(
+                        "E023",
+                        "'Kill' can only be used inside an anchor".to_string(),
+                        "Move this Kill into an @anchor() { ... } block".to_string(),
+                    );
+                }
+                self.infer_expr(e, scope);
+            }
+            Stmt::Kill(None) => {
+                if !self.in_anchor {
+                    self.err(
+                        "E023",
+                        "'Kill' can only be used inside an anchor".to_string(),
+                        "Move this Kill into an @anchor() { ... } block".to_string(),
+                    );
+                }
+            }
+            Stmt::Exit | Stmt::Break => {}
             Stmt::Yield(e) => {
                 if !self.in_anchor {
                     self.err("E020",
@@ -507,9 +590,7 @@ impl Analyzer {
                 if let Some(info) = scope.get(name) {
                     Some(info.ty.clone())
                 } else {
-                    self.err("E004",
-                        format!("Undeclared variable '{}'", name),
-                        format!("Declare '{}' before use \u{2014} e.g. int {} = ...;", name, name));
+                    self.err_undeclared_var(name, scope);
                     None
                 }
             }
@@ -549,11 +630,11 @@ impl Analyzer {
                     | BinOpKind::Div | BinOpKind::Mod => {
                         if matches!(op, BinOpKind::Add) {
                             if matches!((&lt, &rt), (Some(Ty::String), _) | (_, Some(Ty::String))) {
-                                // string + non-string → auto-concat (codegen handles conversion)
+                                // string + non-string ??auto-concat (codegen handles conversion)
                                 return Some(Ty::String);
                             }
                         }
-                        // string - * / % → error
+                        // string - * / % ??error
                         if let (Some(ref l), Some(ref _r)) = (&lt, &rt) {
                             if *l == Ty::String {
                                 self.err("E008",
@@ -655,9 +736,7 @@ impl Analyzer {
                     for arg in args {
                         self.infer_expr(arg, scope);
                     }
-                    self.err("E013",
-                        format!("Undeclared function '{}'", name),
-                        format!("Define '{}' with fn {}(...) {{ ... }}", name, name));
+                    self.err_undeclared_fn(name);
                     None
                 }
             }
@@ -709,11 +788,11 @@ impl Analyzer {
                 let src_ty = self.infer_expr(expr, scope);
                 if let Some(ref st) = src_ty {
                     let valid = match (st, target_ty) {
-                        // numeric → numeric
+                        // numeric ??numeric
                         (s, t) if is_numeric_ty(s) && is_numeric_ty(t) => true,
-                        // bool → int
+                        // bool ??int
                         (Ty::Bool, t) if is_integer_ty(t) => true,
-                        // int → bool
+                        // int ??bool
                         (s, Ty::Bool) if is_integer_ty(s) => true,
                         _ => false,
                     };

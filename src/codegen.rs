@@ -43,6 +43,9 @@ pub struct Codegen<'ctx> {
     /// yield 후 점프할 블록 스택
     yield_merge_bb: Vec<BasicBlock<'ctx>>,
 
+    /// 앵커별 Kill 발생 횟수 슬롯
+    kill_count_slot: Vec<PointerValue<'ctx>>,
+
     /// 현재 함수
     current_fn: Option<FunctionValue<'ctx>>,
 }
@@ -66,6 +69,7 @@ impl<'ctx> Codegen<'ctx> {
             recovery_stack: Vec::new(),
             yield_slot: Vec::new(),
             yield_merge_bb: Vec::new(),
+            kill_count_slot: Vec::new(),
             current_fn: None,
         }
     }
@@ -238,6 +242,18 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    fn free_vault_var(&self, name: &str) {
+        if self.vault_vars.contains(name) {
+            let ptr = self.variables[name];
+            let heap_ptr = self.builder
+                .build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
+                .unwrap()
+                .into_pointer_value();
+            let free_fn = self.module.get_function("free").unwrap();
+            self.builder.build_call(free_fn, &[heap_ptr.into()], "").unwrap();
+        }
+    }
+
     // ── 프로그램 전체 코드 생성 ──
 
     pub fn compile(&mut self, program: &Program) {
@@ -316,7 +332,19 @@ impl<'ctx> Codegen<'ctx> {
                 let main_fn = self.module.add_function("main", main_fn_type, None);
                 self.current_fn = Some(main_fn);
                 let entry = self.context.append_basic_block(main_fn, "entry");
+                let main_recover = self.context.append_basic_block(main_fn, "recover_main");
+                let main_after = self.context.append_basic_block(main_fn, "after_main");
                 self.builder.position_at_end(entry);
+
+                let main_yield = self.build_alloca("main_yield", &Ty::I64);
+                self.builder.build_store(main_yield, self.i64_type().const_int(0, false)).unwrap();
+                let main_kill_count = self.build_alloca("main_kill_count", &Ty::I64);
+                self.builder.build_store(main_kill_count, self.i64_type().const_int(0, false)).unwrap();
+
+                self.recovery_stack.push(main_recover);
+                self.yield_slot.push(main_yield);
+                self.yield_merge_bb.push(main_after);
+                self.kill_count_slot.push(main_kill_count);
 
                 self.compile_stmts(body, &[]);
 
@@ -330,6 +358,8 @@ impl<'ctx> Codegen<'ctx> {
 
                         let yield_alloca = self.build_alloca(&format!("{}_yield", child_name), &Ty::I64);
                         self.builder.build_store(yield_alloca, self.i64_type().const_int(0, false)).unwrap();
+                        let kill_count_alloca = self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
+                        self.builder.build_store(kill_count_alloca, self.i64_type().const_int(0, false)).unwrap();
 
                         self.builder.build_unconditional_branch(child_bb).unwrap();
                         self.builder.position_at_end(child_bb);
@@ -337,6 +367,7 @@ impl<'ctx> Codegen<'ctx> {
                         self.recovery_stack.push(child_recover);
                         self.yield_slot.push(yield_alloca);
                         self.yield_merge_bb.push(child_merge);
+                        self.kill_count_slot.push(kill_count_alloca);
 
                         self.compile_stmts(child_body, &[]);
 
@@ -350,6 +381,8 @@ impl<'ctx> Codegen<'ctx> {
 
                                     let gc_yield = self.build_alloca(&format!("{}_yield", gc_name), &Ty::I64);
                                     self.builder.build_store(gc_yield, self.i64_type().const_int(0, false)).unwrap();
+                                    let gc_kill_count = self.build_alloca(&format!("{}_kill_count", gc_name), &Ty::I64);
+                                    self.builder.build_store(gc_kill_count, self.i64_type().const_int(0, false)).unwrap();
 
                                     self.builder.build_unconditional_branch(gc_bb).unwrap();
                                     self.builder.position_at_end(gc_bb);
@@ -357,6 +390,7 @@ impl<'ctx> Codegen<'ctx> {
                                     self.recovery_stack.push(gc_recover);
                                     self.yield_slot.push(gc_yield);
                                     self.yield_merge_bb.push(gc_merge);
+                                    self.kill_count_slot.push(gc_kill_count);
 
                                     self.compile_stmts(gc_body, &[]);
 
@@ -369,6 +403,7 @@ impl<'ctx> Codegen<'ctx> {
                                     self.recovery_stack.pop();
                                     self.yield_slot.pop();
                                     self.yield_merge_bb.pop();
+                                    self.kill_count_slot.pop();
 
                                     self.builder.position_at_end(gc_merge);
                                 }
@@ -384,10 +419,24 @@ impl<'ctx> Codegen<'ctx> {
                         self.recovery_stack.pop();
                         self.yield_slot.pop();
                         self.yield_merge_bb.pop();
+                        self.kill_count_slot.pop();
 
                         self.builder.position_at_end(child_merge);
                     }
                 }
+
+                if self.no_terminator() {
+                    self.builder.build_unconditional_branch(main_after).unwrap();
+                }
+                self.builder.position_at_end(main_recover);
+                self.builder.build_unconditional_branch(main_after).unwrap();
+
+                self.recovery_stack.pop();
+                self.yield_slot.pop();
+                self.yield_merge_bb.pop();
+                self.kill_count_slot.pop();
+
+                self.builder.position_at_end(main_after);
 
                 if self.no_terminator() {
                     self.builder.build_return(Some(&i32_type.const_int(0, false))).unwrap();
@@ -426,10 +475,29 @@ impl<'ctx> Codegen<'ctx> {
     // ── 구문 목록 ──
 
     fn compile_stmts(&mut self, stmts: &[(Stmt, Span)], params: &[Param]) {
+        let mut local_vaults: Vec<String> = Vec::new();
+        let mut explicit_frees: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (stmt, _) in stmts {
             self.compile_stmt(stmt, params);
+
+            match stmt {
+                Stmt::VaultDecl { name, .. } => local_vaults.push(name.clone()),
+                Stmt::Free(name) => {
+                    explicit_frees.insert(name.clone());
+                }
+                _ => {}
+            }
+
             // break/return 후 더 이상 코드 생성하지 않음
             if !self.no_terminator() { break; }
+        }
+
+        if self.no_terminator() {
+            for name in local_vaults {
+                if !explicit_frees.contains(&name) {
+                    self.free_vault_var(&name);
+                }
+            }
         }
     }
 
@@ -666,36 +734,58 @@ impl<'ctx> Codegen<'ctx> {
                     let ty = self.guess_expr_ty(e, params);
                     self.emit_print(val, Some(&ty));
                 }
-                // 복구 스택이 있으면 가장 가까운 앵커 복구 블록으로 점프
                 if let Some(&recovery_bb) = self.recovery_stack.last() {
-                    self.builder.build_unconditional_branch(recovery_bb).unwrap();
-                } else {
-                    // 복구 블록이 없으면 exit(1)
-                    let exit_fn = self.module.get_function("exit").unwrap();
-                    self.builder.build_call(
-                        exit_fn,
-                        &[self.context.i32_type().const_int(1, false).into()],
-                        "",
-                    ).unwrap();
-                    self.builder.build_unreachable().unwrap();
+                    // 같은 앵커에서 Kill 3회 이상이면 상위 앵커 복구로 승격
+                    let mut target_bb = recovery_bb;
+                    if let Some(&counter_ptr) = self.kill_count_slot.last() {
+                        let cur = self.builder
+                            .build_load(self.i64_type(), counter_ptr, "kill_count")
+                            .unwrap()
+                            .into_int_value();
+                        let next = self.builder
+                            .build_int_add(cur, self.i64_type().const_int(1, false), "kill_count_next")
+                            .unwrap();
+                        self.builder.build_store(counter_ptr, next).unwrap();
+
+                        if self.recovery_stack.len() >= 2 {
+                            let escalate_bb = self.recovery_stack[self.recovery_stack.len() - 2];
+                            let escalate_cond = self.builder
+                                .build_int_compare(
+                                    IntPredicate::UGE,
+                                    next,
+                                    self.i64_type().const_int(3, false),
+                                    "kill_escalate_cond",
+                                )
+                                .unwrap();
+                            let normal_bb = self.context.append_basic_block(
+                                self.current_fn.unwrap(),
+                                "kill_normal_recover",
+                            );
+                            let escalated_bb = self.context.append_basic_block(
+                                self.current_fn.unwrap(),
+                                "kill_escalated_recover",
+                            );
+                            self.builder
+                                .build_conditional_branch(escalate_cond, escalated_bb, normal_bb)
+                                .unwrap();
+
+                            self.builder.position_at_end(normal_bb);
+                            self.builder.build_unconditional_branch(recovery_bb).unwrap();
+                            self.builder.position_at_end(escalated_bb);
+                            target_bb = escalate_bb;
+                        }
+                    }
+                    self.builder.build_unconditional_branch(target_bb).unwrap();
                 }
             }
 
             Stmt::Free(name) => {
-                // Vault 변수의 힙 메모리를 해제
-                if self.vault_vars.contains(name) {
-                    let ptr = self.variables[name];
-                    let heap_ptr = self.builder.build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
-                        .unwrap().into_pointer_value();
-                    let free_fn = self.module.get_function("free").unwrap();
-                    self.builder.build_call(free_fn, &[heap_ptr.into()], "").unwrap();
-                }
+                self.free_vault_var(name);
                 // 일반 변수에 free 호출되면 무시 (analyzer가 이미 경고)
             }
 
             Stmt::Yield(e) => {
                 let val = self.compile_expr(e, params);
-                let ty = self.guess_expr_ty(e, params);
                 // yield 슬롯이 있으면 값 저장 후 앵커 종료 블록으로 점프
                 if let (Some(&slot), Some(&merge_bb)) =
                     (self.yield_slot.last(), self.yield_merge_bb.last())
@@ -703,9 +793,6 @@ impl<'ctx> Codegen<'ctx> {
                     let coerced = self.coerce_to_ty(val, &Ty::I64);
                     self.builder.build_store(slot, coerced).unwrap();
                     self.builder.build_unconditional_branch(merge_bb).unwrap();
-                } else {
-                    // 앵커 바깥 yield → print fallback (분석기가 경고)
-                    self.emit_print(val, Some(&ty));
                 }
             }
 
@@ -726,6 +813,8 @@ impl<'ctx> Codegen<'ctx> {
                 // yield 슬롯 (i64 사용 — 범용)
                 let yield_alloca = self.build_alloca(&format!("{}_yield", name), &Ty::I64);
                 self.builder.build_store(yield_alloca, self.i64_type().const_int(0, false)).unwrap();
+                let kill_count_alloca = self.build_alloca(&format!("{}_kill_count", name), &Ty::I64);
+                self.builder.build_store(kill_count_alloca, self.i64_type().const_int(0, false)).unwrap();
 
                 self.builder.build_unconditional_branch(anchor_bb).unwrap();
                 self.builder.position_at_end(anchor_bb);
@@ -734,6 +823,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.recovery_stack.push(recovery_bb);
                 self.yield_slot.push(yield_alloca);
                 self.yield_merge_bb.push(merge_bb);
+                self.kill_count_slot.push(kill_count_alloca);
 
                 self.compile_stmts(body, params);
 
@@ -751,6 +841,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.recovery_stack.pop();
                 self.yield_slot.pop();
                 self.yield_merge_bb.pop();
+                self.kill_count_slot.pop();
 
                 self.builder.position_at_end(merge_bb);
             }
@@ -963,6 +1054,23 @@ impl<'ctx> Codegen<'ctx> {
                 BinOpKind::Sub => self.builder.build_int_sub(li, ri, "sub").unwrap().into(),
                 BinOpKind::Mul => self.builder.build_int_mul(li, ri, "mul").unwrap().into(),
                 BinOpKind::Div => {
+                    let is_zero = self.builder
+                        .build_int_compare(IntPredicate::EQ, ri, ri.get_type().const_zero(), "div_zero")
+                        .unwrap();
+                    let func = self.current_fn.unwrap();
+                    let ok_bb = self.context.append_basic_block(func, "div_ok");
+                    let err_bb = self.context.append_basic_block(func, "div_err");
+                    self.builder.build_conditional_branch(is_zero, err_bb, ok_bb).unwrap();
+
+                    self.builder.position_at_end(err_bb);
+                    let printf = self.module.get_function("printf").unwrap();
+                    let fmt = self.builder.build_global_string_ptr("runtime error: division by zero\\n", "div_zero_msg").unwrap();
+                    self.builder.build_call(printf, &[fmt.as_pointer_value().into()], "").unwrap();
+                    let exit_fn = self.module.get_function("exit").unwrap();
+                    self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
+                    self.builder.build_unreachable().unwrap();
+
+                    self.builder.position_at_end(ok_bb);
                     if signed {
                         self.builder.build_int_signed_div(li, ri, "sdiv").unwrap().into()
                     } else {
@@ -970,6 +1078,23 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
                 BinOpKind::Mod => {
+                    let is_zero = self.builder
+                        .build_int_compare(IntPredicate::EQ, ri, ri.get_type().const_zero(), "mod_zero")
+                        .unwrap();
+                    let func = self.current_fn.unwrap();
+                    let ok_bb = self.context.append_basic_block(func, "mod_ok");
+                    let err_bb = self.context.append_basic_block(func, "mod_err");
+                    self.builder.build_conditional_branch(is_zero, err_bb, ok_bb).unwrap();
+
+                    self.builder.position_at_end(err_bb);
+                    let printf = self.module.get_function("printf").unwrap();
+                    let fmt = self.builder.build_global_string_ptr("runtime error: modulo by zero\\n", "mod_zero_msg").unwrap();
+                    self.builder.build_call(printf, &[fmt.as_pointer_value().into()], "").unwrap();
+                    let exit_fn = self.module.get_function("exit").unwrap();
+                    self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
+                    self.builder.build_unreachable().unwrap();
+
+                    self.builder.position_at_end(ok_bb);
                     if signed {
                         self.builder.build_int_signed_rem(li, ri, "srem").unwrap().into()
                     } else {

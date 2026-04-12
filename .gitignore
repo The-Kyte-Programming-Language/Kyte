@@ -1,1 +1,7 @@
 /target
+*.o
+*.ll
+*.exe
+crash.log
+output.ll
+editors/vscode/node_modules/

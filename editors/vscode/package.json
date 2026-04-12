@@ -1,0 +1,32 @@
+{
+  "name": "kyte-lang",
+  "displayName": "Kyte Language",
+  "description": "Language support for the Kyte programming language",
+  "version": "0.1.0",
+  "publisher": "kyte",
+  "license": "Apache-2.0",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:kyte"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "kyte",
+        "aliases": ["Kyte", "kyte"],
+        "extensions": [".ky"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kyte",
+        "scopeName": "source.kyte",
+        "path": "./syntaxes/kyte.tmLanguage.json"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

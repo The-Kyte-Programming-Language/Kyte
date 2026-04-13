@@ -1,5 +1,5 @@
 use crate::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 const RED:    &str = "\x1b[1;31m";
@@ -106,6 +106,7 @@ fn ty_name(ty: &Ty) -> String {
         Ty::U64    => "u64".to_string(),
         Ty::Array(inner) => format!("{}[]", ty_name(inner)),
         Ty::Struct(name) => name.clone(),
+        Ty::Auto => "auto".to_string(),
     }
 }
 
@@ -137,9 +138,251 @@ pub struct Analyzer {
     source_lines: Vec<String>,
     current_span: Span,
     in_anchor:    bool,
+    /// free() 이후 사용 추적 (use-after-free 진단)
+    freed_vars:   HashSet<String>,
+    /// 사용된 변수 추적 (unused variable 경고용)
+    used_vars:    HashSet<String>,
+    /// 선언된 변수 (이름, span)
+    declared_vars: Vec<(String, Span)>,
+    /// 분석 설정 (A05)
+    config: AnalyzerConfig,
+}
+
+/// Analyzer 동작을 제어하는 설정 구조체 (A05)
+#[derive(Clone, Debug, Default)]
+pub struct AnalyzerConfig {
+    /// 모든 경고 활성화 (--Wall)
+    pub wall: bool,
+    /// 경고를 오류로 처리 (--Werror)
+    pub werror: bool,
+    /// 미사용 변수 경고 비활성화 (--no-unused)
+    pub no_unused: bool,
+}
+
+fn int_range(ty: &Ty) -> Option<(i128, i128)> {
+    match ty {
+        Ty::I8  => Some((-128, 127)),
+        Ty::I16 => Some((-32768, 32767)),
+        Ty::I32 => Some((-2147483648, 2147483647)),
+        Ty::I64 | Ty::Int => Some((-9223372036854775808, 9223372036854775807)),
+        Ty::U8  => Some((0, 255)),
+        Ty::U16 => Some((0, 65535)),
+        Ty::U32 => Some((0, 4294967295)),
+        Ty::U64 => Some((0, 18446744073709551615)),
+        _ => None,
+    }
+}
+
+fn const_int_value(expr: &Expr) -> Option<i128> {
+    match expr {
+        Expr::IntLit(n) => Some(*n as i128),
+        Expr::UnaryOp { op: UnaryOpKind::Neg, expr } => {
+            const_int_value(expr).map(|v| -v)
+        }
+        _ => None,
+    }
 }
 
 impl Analyzer {
+    fn stmt_is_early_exit(stmt: &Stmt) -> bool {
+        matches!(stmt, Stmt::Return(_) | Stmt::Exit | Stmt::Break | Stmt::Kill(_) | Stmt::Yield(_))
+    }
+
+    fn block_has_break(stmts: &[(Stmt, Span)]) -> bool {
+        for (stmt, _) in stmts {
+            match stmt {
+                Stmt::Break => return true,
+                Stmt::If { then_body, else_body, .. } => {
+                    if Self::block_has_break(then_body) { return true; }
+                    if let Some(eb) = else_body {
+                        if Self::block_has_break(eb) { return true; }
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// 블록이 반드시 일찍 종료(return/exit/break/kill/yield)되는지 확인
+    fn block_definitely_exits(stmts: &[(Stmt, Span)]) -> bool {
+        for (stmt, _) in stmts {
+            if Self::stmt_is_early_exit(stmt) {
+                return true;
+            }
+            // if/else 양쪽 모두 exit하면 전체가 exit
+            if let Stmt::If { then_body, else_body: Some(else_body), .. } = stmt {
+                if Self::block_definitely_exits(then_body) && Self::block_definitely_exits(else_body) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// 문장이 name 변수를 반드시 처리(free 또는 scope exit)하는지 확인
+    fn stmt_must_free(stmt: &Stmt, name: &str) -> bool {
+        match stmt {
+            Stmt::Free(n) => n == name,
+            Stmt::If { then_body, else_body: Some(else_body), .. } => {
+                // 각 브랜치가 free하거나 일찍 종료하면 vault가 처리됨
+                let then_ok = Self::block_must_free(then_body, name) || Self::block_definitely_exits(then_body);
+                let else_ok = Self::block_must_free(else_body, name) || Self::block_definitely_exits(else_body);
+                then_ok && else_ok
+            }
+            _ => false,
+        }
+    }
+
+    fn block_must_free(stmts: &[(Stmt, Span)], name: &str) -> bool {
+        for (stmt, _) in stmts {
+            if Self::stmt_must_free(stmt, name) {
+                return true;
+            }
+            if Self::stmt_is_early_exit(stmt) {
+                return true; // early exit → cleanup_to_depth가 처리
+            }
+        }
+        false
+    }
+
+    fn collect_decl_with_log(
+        &mut self,
+        stmt: &Stmt,
+        scope: &mut HashMap<String, VarInfo>,
+        scope_log: &mut Vec<(String, Option<VarInfo>)>,
+    ) {
+        match stmt {
+            Stmt::VarDecl { ty, name, .. } => {
+                if scope.contains_key(name) {
+                    self.warn("W001",
+                        format!("Variable '{}' shadows a previous declaration", name),
+                        format!("Use a different name, or remove the earlier '{}'", name));
+                }
+                scope_log.push((name.clone(), scope.get(name).cloned()));
+                scope.insert(name.clone(), VarInfo { ty: ty.clone(), is_vault: false });
+            }
+            Stmt::VaultDecl { ty, name, .. } => {
+                if scope.contains_key(name) {
+                    self.warn("W001",
+                        format!("Variable '{}' shadows a previous declaration", name),
+                        format!("Use a different name, or remove the earlier '{}'", name));
+                }
+                scope_log.push((name.clone(), scope.get(name).cloned()));
+                scope.insert(name.clone(), VarInfo { ty: ty.clone(), is_vault: true });
+            }
+            Stmt::For { var, .. } => {
+                scope_log.push((var.clone(), scope.get(var).cloned()));
+                scope.insert(var.clone(), VarInfo { ty: Ty::Int, is_vault: false });
+            }
+            _ => {}
+        }
+    }
+
+    fn restore_scope(
+        scope: &mut HashMap<String, VarInfo>,
+        scope_log: Vec<(String, Option<VarInfo>)>,
+    ) {
+        for (name, previous) in scope_log.into_iter().rev() {
+            match previous {
+                Some(info) => {
+                    scope.insert(name, info);
+                }
+                None => {
+                    scope.remove(&name);
+                }
+            }
+        }
+    }
+
+    fn check_scoped_block(
+        &mut self,
+        stmts: &[(Stmt, Span)],
+        scope: &mut HashMap<String, VarInfo>,
+        return_ty: &Option<&Ty>,
+        enforce_loop_vault_free: bool,
+    ) {
+        let mut scope_log = Vec::new();
+        let mut seen_frees = HashSet::new();
+        // H07: track decl spans for unused variable warning
+        let mut decl_spans: HashMap<String, Span> = HashMap::new();
+        let mut found_exit = false;
+        for (idx, (stmt, sp)) in stmts.iter().enumerate() {
+            self.current_span = *sp;
+            // H07: unreachable code warning
+            if found_exit && idx > 0 {
+                self.warn("W004",
+                    "Unreachable code after return/exit/break/kill".to_string(),
+                    "Remove or move the code before the exit point".to_string());
+                break;
+            }
+            if Self::stmt_is_early_exit(stmt) { found_exit = true; }
+            if enforce_loop_vault_free {
+                if let Stmt::VaultDecl { name, .. } = stmt {
+                    let must_free = Self::block_must_free(&stmts[idx + 1..], name);
+                    if !must_free {
+                        self.err("E017",
+                            format!("Vault '{}' allocated in loop without guaranteed free", name),
+                            format!("Ensure every path in the loop body executes free({})", name));
+                    }
+                }
+            }
+            if let Stmt::Free(name) = stmt {
+                if !seen_frees.insert(name.clone()) {
+                    self.err(
+                        "E030",
+                        format!("Duplicate free('{}') in the same scope", name),
+                        format!("Remove redundant free({}) or guard it by control flow", name),
+                    );
+                }
+            }
+            self.check_stmt_scoped(stmt, scope, return_ty);
+            // H07: track new decls
+            match stmt {
+                Stmt::VarDecl { name, .. } | Stmt::VaultDecl { name, .. } => {
+                    decl_spans.entry(name.clone()).or_insert(*sp);
+                }
+                Stmt::For { var, .. } => {
+                    decl_spans.entry(var.clone()).or_insert(*sp);
+                }
+                _ => {}
+            }
+            self.collect_decl_with_log(stmt, scope, &mut scope_log);
+            // 변수 (재)선언 시 freed 상태 해제
+            match stmt {
+                Stmt::VarDecl { name, .. } | Stmt::VaultDecl { name, .. } => {
+                    self.freed_vars.remove(name);
+                }
+                Stmt::For { var, .. } => {
+                    self.freed_vars.remove(var);
+                }
+                _ => {}
+            }
+        }
+        // 블록 로컬 변수가 스코프를 벗어나면 freed 상태도 정리
+        let block_local_names: Vec<String> = scope_log.iter()
+            .filter(|(_, prev)| prev.is_none())
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        // H07: unused variable 경고 (명칭이 _로 시작하면 suppress, --no-unused이면 skip)
+        if !self.config.no_unused {
+            for (name, sp) in &decl_spans {
+                if !name.starts_with('_') && !self.used_vars.contains(name) {
+                    self.current_span = *sp;
+                    self.warn("W003",
+                        format!("Variable '{}' is declared but never used", name),
+                        format!("Prefix with '_' to suppress: _{}", name));
+                }
+            }
+        }
+
+        Self::restore_scope(scope, scope_log);
+        for name in block_local_names {
+            self.freed_vars.remove(&name);
+        }
+    }
+
     fn err(&mut self, code: &'static str, msg: String, hint: String) {
         let span = self.current_span;
         let source_line = self.source_lines
@@ -157,8 +400,10 @@ impl Analyzer {
             .get(span.line.saturating_sub(1))
             .cloned()
             .unwrap_or_default();
+        // --Werror: 경고를 오류로 승격 (A05)
+        let severity = if self.config.werror { Severity::Error } else { Severity::Warning };
         self.errors.push(CompileError {
-            code, severity: Severity::Warning, message: msg, hint, span, source_line,
+            code, severity, message: msg, hint, span, source_line,
         });
     }
 
@@ -166,7 +411,7 @@ impl Analyzer {
         let hint = if let Some(similar) = nearest_name(name, scope.keys()) {
             format!("Did you mean '{}' ?", similar)
         } else {
-            format!("Declare '{}' before use ??e.g. int {} = ...;", name, name)
+            format!("Declare '{}' before use, e.g. int {} = ...;", name, name)
         };
         self.err("E004", format!("Undeclared variable '{}'", name), hint);
     }
@@ -181,6 +426,10 @@ impl Analyzer {
     }
 
     pub fn analyze(program: &Program, source: &str) -> Vec<CompileError> {
+        Self::analyze_with_config(program, source, AnalyzerConfig::default())
+    }
+
+    pub fn analyze_with_config(program: &Program, source: &str, config: AnalyzerConfig) -> Vec<CompileError> {
         let source_lines: Vec<String> = source.lines().map(String::from).collect();
         let mut a = Analyzer {
             errors: Vec::new(),
@@ -189,9 +438,13 @@ impl Analyzer {
             source_lines,
             current_span: Span { line: 0, col: 0 },
             in_anchor: false,
+            freed_vars: HashSet::new(),
+            used_vars: HashSet::new(),
+            declared_vars: Vec::new(),
+            config,
         };
 
-        // 0: main ?듭빱 議댁옱/以묐났 寃??(top-level)
+        // 0: verify top-level main anchor existence/uniqueness
         let mut main_count = 0usize;
         let mut first_item_span: Option<Span> = None;
         for (item, item_span) in &program.items {
@@ -258,18 +511,42 @@ impl Analyzer {
             }
         }
 
+        // H06: 순환 참조 구조체 감지
+        for (item, item_span) in &program.items {
+            if let TopLevel::Struct { name, .. } = item {
+                let mut visiting = HashSet::new();
+                if a.check_circular_struct(name, &mut visiting) {
+                    a.current_span = *item_span;
+                    a.err("E034",
+                        format!("Circular reference detected in struct '{}'", name),
+                        "Use a pointer/Vault or break the cycle".to_string());
+                }
+            }
+        }
+
         // 2: analyze bodies
         for (item, item_span) in &program.items {
             match item {
                 TopLevel::Anchor { .. } => {
                     a.check_anchor(item, *item_span, &HashMap::new());
                 }
-                TopLevel::Function { name, params, return_ty, body } => {
+                TopLevel::Function { name, params, return_ty, body, decorators: _ } => {
                     let mut scope: HashMap<String, VarInfo> = HashMap::new();
                     for p in params {
                         scope.insert(p.name.clone(), VarInfo { ty: p.ty.clone(), is_vault: false });
                     }
                     a.check_stmts(body, &mut scope, return_ty.as_ref(), name);
+                    // H04: 반환값이 있는 함수의 모든 경로에 return이 있는지 검사
+                    if return_ty.is_some() && !Self::block_definitely_exits(body) {
+                        a.current_span = *item_span;
+                        a.err("E033",
+                            format!("Function '{}' may not return a value on all paths", name),
+                            "Ensure every code path has a return statement".to_string());
+                    }
+                    // H07: 미사용 변수 경고
+                    for p in params {
+                        a.declared_vars.push((p.name.clone(), *item_span));
+                    }
                 }
                 TopLevel::Struct { .. } => {}
             }
@@ -292,7 +569,7 @@ impl Analyzer {
             let mut scope = inherited.clone();
             for (stmt, sp) in body {
                 self.current_span = *sp;
-                self.check_stmt_scoped(stmt, &scope, &None);
+                self.check_stmt_scoped(stmt, &mut scope, &None);
                 self.collect_decl(stmt, &mut scope);
             }
             for (child, child_span) in children {
@@ -344,12 +621,31 @@ impl Analyzer {
     fn check_stmt_scoped(
         &mut self,
         stmt: &Stmt,
-        scope: &HashMap<String, VarInfo>,
+        scope: &mut HashMap<String, VarInfo>,
         return_ty: &Option<&Ty>,
     ) {
         match stmt {
-            Stmt::VarDecl { ty, name: _, value } => {
-                if let Ty::Struct(sname) = ty {
+            Stmt::VarDecl { ty, name, value } => {
+                // A07: auto 타입 추론
+                let effective_ty = if *ty == Ty::Auto {
+                    let inferred = self.infer_expr(value, scope);
+                    if let Some(ref vt) = inferred {
+                        // scope 업데이트
+                        if let Some(info) = scope.get_mut(name) {
+                            info.ty = vt.clone();
+                        }
+                        vt.clone()
+                    } else {
+                        self.err("E035",
+                            "Cannot infer type for 'auto' declaration".to_string(),
+                            "Specify the type explicitly".to_string());
+                        Ty::Int // fallback
+                    }
+                } else {
+                    ty.clone()
+                };
+
+                if let Ty::Struct(sname) = &effective_ty {
                     if !self.structs.contains_key(sname) {
                         self.err(
                             "E026",
@@ -358,14 +654,18 @@ impl Analyzer {
                         );
                     }
                 }
-                let val_ty = self.infer_expr(value, scope);
-                if let Some(vt) = &val_ty {
-                    if !types_compatible(ty, vt) {
-                        self.err("E002",
-                            format!("Type mismatch \u{2014} expected {}, got {}", ty_name(ty), ty_name(vt)),
-                            format!("Change the value to type {}, or declare as {}", ty_name(ty), ty_name(vt)));
+                if *ty != Ty::Auto {
+                    let val_ty = self.infer_expr(value, scope);
+                    if let Some(vt) = &val_ty {
+                        if !types_compatible(&effective_ty, vt) {
+                            self.err("E002",
+                                format!("Type mismatch \u{2014} expected {}, got {}", ty_name(&effective_ty), ty_name(vt)),
+                                format!("Change the value to type {}, or declare as {}", ty_name(&effective_ty), ty_name(vt)));
+                        }
                     }
                 }
+                // H03: 정수 범위 체크
+                self.check_int_range(&effective_ty, value);
             }
             Stmt::VaultDecl { ty, name: _, value } => {
                 if let Ty::Struct(sname) = ty {
@@ -385,9 +685,16 @@ impl Analyzer {
                             format!("Change the value to type {}, or declare vault as {}", ty_name(ty), ty_name(vt)));
                     }
                 }
+                // H03: 정수 범위 체크
+                self.check_int_range(ty, value);
             }
             Stmt::Assign { name, value } => {
                 if let Some(info) = scope.get(name) {
+                    if self.freed_vars.contains(name) {
+                        self.err("E032",
+                            format!("Use of '{}' after free — possible use-after-free", name),
+                            format!("Do not write to '{}' after free(), or re-allocate with Vault", name));
+                    }
                     let val_ty = self.infer_expr(value, scope);
                     if let Some(vt) = &val_ty {
                         if !types_compatible(&info.ty, vt) {
@@ -405,6 +712,11 @@ impl Analyzer {
             }
             Stmt::IndexAssign { name, index, value } => {
                 if let Some(info) = scope.get(name) {
+                    if self.freed_vars.contains(name) {
+                        self.err("E032",
+                            format!("Use of '{}' after free — possible use-after-free", name),
+                            format!("Do not index '{}' after free(), or re-allocate with Vault", name));
+                    }
                     if let Ty::Array(inner) = &info.ty {
                         let idx_ty = self.infer_expr(index, scope);
                         if let Some(ref it) = idx_ty {
@@ -439,6 +751,11 @@ impl Analyzer {
             }
             Stmt::FieldAssign { name, field, value } => {
                 if let Some(info) = scope.get(name) {
+                    if self.freed_vars.contains(name) {
+                        self.err("E032",
+                            format!("Use of '{}' after free — possible use-after-free", name),
+                            format!("Do not access '{}' after free(), or re-allocate with Vault", name));
+                    }
                     if let Ty::Struct(sname) = &info.ty {
                         if let Some(fields) = self.structs.get(sname) {
                             if let Some(sf) = fields.iter().find(|f| f.name == *field) {
@@ -483,6 +800,11 @@ impl Analyzer {
             }
             Stmt::CompoundAssign { name, value, .. } => {
                 if let Some(info) = scope.get(name) {
+                    if self.freed_vars.contains(name) {
+                        self.err("E032",
+                            format!("Use of '{}' after free — possible use-after-free", name),
+                            format!("Do not use '{}' after free(), or re-allocate with Vault", name));
+                    }
                     let val_ty = self.infer_expr(value, scope);
                     if let Some(vt) = &val_ty {
                         if !types_compatible(&info.ty, vt) {
@@ -529,6 +851,19 @@ impl Analyzer {
             Stmt::Print(args) => {
                 for a in args { self.infer_expr(a, scope); }
             }
+            Stmt::Assert { cond, message } => {
+                let cond_ty = self.infer_expr(cond, scope);
+                if let Some(ct) = &cond_ty {
+                    if *ct != Ty::Bool {
+                        self.err("E036",
+                            format!("assert condition must be bool, got {}", ty_name(ct)),
+                            "Use a boolean expression as the assert condition".to_string());
+                    }
+                }
+                if let Some(msg) = message {
+                    self.infer_expr(msg, scope);
+                }
+            }
             Stmt::Return(Some(e)) => {
                 let val_ty = self.infer_expr(e, scope);
                 if let (Some(expected), Some(got)) = (return_ty, &val_ty) {
@@ -555,38 +890,35 @@ impl Analyzer {
                             "Use a comparison (e.g. x > 0) or a bool variable".into());
                     }
                 }
-                let mut then_scope = scope.clone();
-                for (s, sp) in then_body {
-                    self.current_span = *sp;
-                    self.check_stmt_scoped(s, &then_scope, return_ty);
-                    self.collect_decl(s, &mut then_scope);
-                }
+                // M06: 경로 민감 freed_vars 추적 — intersection 방식으로 false-positive 감소
+                let saved_freed = self.freed_vars.clone();
+                self.check_scoped_block(then_body, scope, return_ty, false);
+                let freed_after_then = self.freed_vars.clone();
+                self.freed_vars = saved_freed.clone();
                 if let Some(else_body) = else_body {
-                    let mut else_scope = scope.clone();
-                    for (s, sp) in else_body {
-                        self.current_span = *sp;
-                        self.check_stmt_scoped(s, &else_scope, return_ty);
-                        self.collect_decl(s, &mut else_scope);
+                    self.check_scoped_block(else_body, scope, return_ty, false);
+                    let freed_after_else = self.freed_vars.clone();
+                    // 양 브랜치 모두 free한 변수만 이후 freed로 간주 (intersection)
+                    self.freed_vars = saved_freed;
+                    for v in &freed_after_then {
+                        if freed_after_else.contains(v) {
+                            self.freed_vars.insert(v.clone());
+                        }
                     }
+                } else {
+                    // else 없으면 then에서 free된 것은 조건부 free → 보수적으로 추가
+                    self.freed_vars = saved_freed;
+                    self.freed_vars.extend(freed_after_then);
                 }
             }
             Stmt::Loop(body) => {
-                for (s, _) in body {
-                    if let Stmt::VaultDecl { name, .. } = s {
-                        let has_free = body.iter().any(|(s2, _)| matches!(s2, Stmt::Free(n) if n == name));
-                        if !has_free {
-                            self.err("E017",
-                                format!("Vault '{}' allocated in loop without explicit free", name),
-                                format!("Add free({}) before the loop ends", name));
-                        }
-                    }
+                // M03: loop without break 경고
+                if !Self::block_has_break(body) {
+                    self.warn("W005",
+                        "Infinite loop: 'loop' has no 'break' statement".to_string(),
+                        "Add a 'break;' statement or use 'while cond { }' instead".to_string());
                 }
-                let mut loop_scope = scope.clone();
-                for (s, sp) in body {
-                    self.current_span = *sp;
-                    self.check_stmt_scoped(s, &loop_scope, return_ty);
-                    self.collect_decl(s, &mut loop_scope);
-                }
+                self.check_scoped_block(body, scope, return_ty, true);
             }
             Stmt::While { cond, body } => {
                 let cond_ty = self.infer_expr(cond, scope);
@@ -597,64 +929,75 @@ impl Analyzer {
                             "Use a comparison (e.g. x > 0) or a bool variable".into());
                     }
                 }
-                for (s, _) in body {
-                    if let Stmt::VaultDecl { name, .. } = s {
-                        let has_free = body.iter().any(|(s2, _)| matches!(s2, Stmt::Free(n) if n == name));
-                        if !has_free {
-                            self.err("E017",
-                                format!("Vault '{}' allocated in loop without explicit free", name),
-                                format!("Add free({}) before the loop ends", name));
-                        }
-                    }
-                }
-                let mut while_scope = scope.clone();
-                for (s, sp) in body {
-                    self.current_span = *sp;
-                    self.check_stmt_scoped(s, &while_scope, return_ty);
-                    self.collect_decl(s, &mut while_scope);
-                }
+                self.check_scoped_block(body, scope, return_ty, true);
             }
-            Stmt::For { from, to, body, var, .. } => {
+            Stmt::For { from, to, body, .. } => {
                 self.infer_expr(from, scope);
                 self.infer_expr(to, scope);
-                for (s, _) in body {
-                    if let Stmt::VaultDecl { name, .. } = s {
-                        let has_free = body.iter().any(|(s2, _)| matches!(s2, Stmt::Free(n) if n == name));
-                        if !has_free {
-                            self.err("E017",
-                                format!("Vault '{}' allocated in loop without explicit free", name),
-                                format!("Add free({}) before the loop ends", name));
+                let mut for_scope_log = Vec::new();
+                self.collect_decl_with_log(stmt, scope, &mut for_scope_log);
+                self.check_scoped_block(body, scope, return_ty, true);
+                Self::restore_scope(scope, for_scope_log);
+            }
+            Stmt::Free(name) => {
+                match scope.get(name) {
+                    None => {
+                        self.err("E004",
+                            format!("Undeclared variable '{}'", name),
+                            format!("Declare '{}' before use \u{2014} e.g. int {} = ...;", name, name));
+                    }
+                    Some(info) => {
+                        if !info.is_vault {
+                            self.err(
+                                "E031",
+                                format!("free({}) is only valid for Vault variables", name),
+                                format!("Declare '{}' as Vault {} {} = ...; or remove free({})", name, ty_name(&info.ty), name, name),
+                            );
                         }
                     }
                 }
-                let mut for_scope = scope.clone();
-                for_scope.insert(var.clone(), VarInfo { ty: Ty::Int, is_vault: false });
-                for (s, sp) in body {
-                    self.current_span = *sp;
-                    self.check_stmt_scoped(s, &for_scope, return_ty);
-                    self.collect_decl(s, &mut for_scope);
-                }
-            }
-            Stmt::Free(name) => {
-                if !scope.contains_key(name) {
-                    self.err("E004",
-                        format!("Undeclared variable '{}'", name),
-                        format!("Declare '{}' before use \u{2014} e.g. int {} = ...;", name, name));
-                }
+                // use-after-free 추적: free 이후 사용 시 E032
+                self.freed_vars.insert(name.clone());
             }
             Stmt::InlineAnchor { body, .. } => {
                 let saved = self.in_anchor;
                 self.in_anchor = true;
-                let mut inner_scope = scope.clone();
-                for (s, sp) in body {
-                    self.current_span = *sp;
-                    self.check_stmt_scoped(s, &inner_scope, return_ty);
-                    self.collect_decl(s, &mut inner_scope);
-                }
+                self.check_scoped_block(body, scope, return_ty, false);
                 self.in_anchor = saved;
             }
             Stmt::ExprStmt(e) => { self.infer_expr(e, scope); }
         }
+    }
+
+    /// H03: 정수 리터럴이 대상 타입 범위를 초과하는지 검사
+    fn check_int_range(&mut self, ty: &Ty, value: &Expr) {
+        if let Some((lo, hi)) = int_range(ty) {
+            if let Some(val) = const_int_value(value) {
+                if val < lo || val > hi {
+                    self.warn("W002",
+                        format!("Integer literal {} overflows type {} (range {}..{})", val, ty_name(ty), lo, hi),
+                        format!("Use a larger type or a value within {}..{}", lo, hi));
+                }
+            }
+        }
+    }
+
+    /// H06: 순환 참조 구조체 감지
+    fn check_circular_struct(&self, name: &str, visiting: &mut HashSet<String>) -> bool {
+        if !visiting.insert(name.to_string()) {
+            return true; // cycle detected
+        }
+        if let Some(fields) = self.structs.get(name) {
+            for field in fields {
+                if let Ty::Struct(ref sname) = field.ty {
+                    if self.check_circular_struct(sname, visiting) {
+                        return true;
+                    }
+                }
+            }
+        }
+        visiting.remove(name);
+        false
     }
 
     fn infer_expr(&mut self, expr: &Expr, scope: &HashMap<String, VarInfo>) -> Option<Ty> {
@@ -665,7 +1008,13 @@ impl Analyzer {
             Expr::Bool(_)      => Some(Ty::Bool),
 
             Expr::Ident(name) => {
+                self.used_vars.insert(name.clone());
                 if let Some(info) = scope.get(name) {
+                    if self.freed_vars.contains(name) {
+                        self.err("E032",
+                            format!("Use of '{}' after free — possible use-after-free", name),
+                            format!("Do not access '{}' after free(), or re-allocate with Vault", name));
+                    }
                     Some(info.ty.clone())
                 } else {
                     self.err_undeclared_var(name, scope);
@@ -708,11 +1057,11 @@ impl Analyzer {
                     | BinOpKind::Div | BinOpKind::Mod => {
                         if matches!(op, BinOpKind::Add) {
                             if matches!((&lt, &rt), (Some(Ty::String), _) | (_, Some(Ty::String))) {
-                                // string + non-string ??auto-concat (codegen handles conversion)
+                                // string + non-string -> auto-concat (handled in codegen)
                                 return Some(Ty::String);
                             }
                         }
-                        // string - * / % ??error
+                        // string -, *, /, % are invalid
                         if let (Some(ref l), Some(ref _r)) = (&lt, &rt) {
                             if *l == Ty::String {
                                 self.err("E008",
@@ -815,6 +1164,59 @@ impl Analyzer {
                         self.infer_expr(arg, scope);
                     }
                     self.err_undeclared_fn(name);
+                    None
+                }
+            }
+
+            Expr::MethodCall { base, method, args } => {
+                let base_ty = self.infer_expr(base, scope);
+                let sname = if let Some(Ty::Struct(n)) = base_ty.clone() {
+                    n
+                } else {
+                    self.err(
+                        "E028",
+                        format!("Cannot call method '{}' on non-struct value", method),
+                        "Method call requires a struct value (e.g. user.method())".to_string(),
+                    );
+                    for arg in args {
+                        self.infer_expr(arg, scope);
+                    }
+                    return None;
+                };
+
+                let fn_name = format!("{}.{}", sname, method);
+                if let Some(sig) = self.functions.get(&fn_name).cloned() {
+                    // method는 self 파라미터(자동 삽입) + 사용자 인자들
+                    let expected_user_args = sig.params.len().saturating_sub(1);
+                    if args.len() != expected_user_args {
+                        self.err(
+                            "E011",
+                            format!("'{}' expects {} argument(s), got {}", fn_name, expected_user_args, args.len()),
+                            format!("Method signature: {}(...)", fn_name),
+                        );
+                    }
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_ty = self.infer_expr(arg, scope);
+                        if let (Some(ref at), Some(expected)) = (&arg_ty, sig.params.get(i + 1)) {
+                            if !types_compatible(expected, at) {
+                                self.err(
+                                    "E012",
+                                    format!("Arg {} of '{}' — expected {}, got {}", i + 1, fn_name, ty_name(expected), ty_name(at)),
+                                    format!("Pass a {} value as argument {}", ty_name(expected), i + 1),
+                                );
+                            }
+                        }
+                    }
+                    sig.return_ty
+                } else {
+                    for arg in args {
+                        self.infer_expr(arg, scope);
+                    }
+                    self.err(
+                        "E013",
+                        format!("Undeclared method '{}.{}'", sname, method),
+                        format!("Define it with fn {}.{}(...) {{ ... }}", sname, method),
+                    );
                     None
                 }
             }

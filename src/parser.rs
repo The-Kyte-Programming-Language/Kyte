@@ -1,10 +1,14 @@
 use crate::ast::*;
 
+const MAX_DEPTH: usize = 256;
+
 pub struct Parser {
     tokens: Vec<Token>,
     lines:  Vec<usize>,
     cols:   Vec<usize>,
     pos:    usize,
+    pub errors: Vec<String>,
+    depth:  usize,
 }
 
 impl Parser {
@@ -17,7 +21,30 @@ impl Parser {
             lines.push(line);
             cols.push(col);
         }
-        Parser { tokens, lines, cols, pos: 0 }
+        Parser { tokens, lines, cols, pos: 0, errors: Vec::new(), depth: 0 }
+    }
+
+    fn is_keyword(name: &str) -> bool {
+        matches!(
+            name,
+            "main" | "fn" | "Vault" | "Kill" | "Exit" | "yield" | "return"
+            | "if" | "else" | "loop" | "while" | "for" | "in" | "break"
+            | "true" | "false" | "free" | "print" | "as" | "struct"
+            | "int" | "float" | "string" | "bool" | "auto" | "assert"
+            | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+        )
+    }
+
+    /// 일반 식별자 컨텍스트에서 키워드는 변수명으로 사용 불가 (M02)
+    fn eat_var_ident(&mut self) -> String {
+        let name = self.eat_ident();
+        if Self::is_keyword(&name) {
+            self.errors.push(format!(
+                "Reserved keyword '{}' cannot be used as identifier at line {}:{}",
+                name, self.current_line(), self.current_col()
+            ));
+        }
+        name
     }
 
     fn current(&self) -> &Token {
@@ -44,9 +71,26 @@ impl Parser {
         tok
     }
 
+    fn peek(&self, offset: usize) -> &Token {
+        self.tokens.get(self.pos + offset).unwrap_or(&Token::EOF)
+    }
+
     fn skip_decorator(&mut self) {
+        self.parse_decorator();
+    }
+
+    /// #[name] 또는 #name 또는 #name(...) 형태의 decorator를 파싱하여 이름을 반환합니다.
+    fn parse_decorator(&mut self) -> String {
         self.expect(&Token::Hash);
-        let _name = self.eat_ident();
+
+        // #[name] 형태 지원
+        let has_bracket = self.current() == &Token::LBracket;
+        if has_bracket {
+            self.advance();
+        }
+
+        let name = self.eat_ident();
+
         if self.current() == &Token::LParen {
             self.advance();
             let mut depth = 1usize;
@@ -60,30 +104,45 @@ impl Parser {
                         depth -= 1;
                         self.advance();
                     }
-                    Token::EOF => panic!(
-                        "Unclosed decorator arguments at line {}:{}",
-                        self.current_line(),
-                        self.current_col()
-                    ),
+                    Token::EOF => {
+                        self.errors.push(format!(
+                            "Unclosed decorator arguments at line {}:{}",
+                            self.current_line(),
+                            self.current_col()
+                        ));
+                        break;
+                    },
                     _ => {
                         self.advance();
                     }
                 }
             }
         }
+
+        if has_bracket {
+            if self.current() == &Token::RBracket {
+                self.advance();
+            }
+        }
+
+        name
     }
 
     fn expect(&mut self, expected: &Token) {
         if self.current() == expected {
             self.advance();
         } else {
-                panic!(
-                    "Expected {:?} but got {:?} at line {}:{}",
-                    expected,
-                    self.current(),
-                    self.current_line(),
-                    self.current_col()
-                );
+            self.errors.push(format!(
+                "Expected {:?} but got {:?} at line {}:{}",
+                expected,
+                self.current(),
+                self.current_line(),
+                self.current_col()
+            ));
+            // 에러 복구: 동기화 토큰까지 스킵 (세미콜론, 중괄호 등)
+            if !matches!(self.current(), Token::Semicolon | Token::RBrace | Token::RParen | Token::RBracket | Token::EOF) {
+                self.advance();
+            }
         }
     }
 
@@ -123,12 +182,15 @@ impl Parser {
             Token::TyU16    => { self.advance(); "u16".to_string() }
             Token::TyU32    => { self.advance(); "u32".to_string() }
             Token::TyU64    => { self.advance(); "u64".to_string() }
-            t => panic!(
-                "Expected identifier but got {:?} at line {}:{}",
-                t,
-                self.current_line(),
-                self.current_col()
-            ),
+            t => {
+                self.errors.push(format!(
+                    "Expected identifier but got {:?} at line {}:{}",
+                    t,
+                    self.current_line(),
+                    self.current_col()
+                ));
+                "_error_".to_string()
+            },
         }
     }
 
@@ -148,12 +210,15 @@ impl Parser {
             Token::TyU32  => { self.advance(); Ty::U32 }
             Token::TyU64  => { self.advance(); Ty::U64 }
             Token::Ident(name) => { self.advance(); Ty::Struct(name) }
-            t => panic!(
-                "Expected type but got {:?} at line {}:{}",
-                t,
-                self.current_line(),
-                self.current_col()
-            ),
+            t => {
+                self.errors.push(format!(
+                    "Expected type but got {:?} at line {}:{}",
+                    t,
+                    self.current_line(),
+                    self.current_col()
+                ));
+                Ty::Int // fallback
+            },
         };
         // int[] 같은 배열 타입
         if self.current() == &Token::LBracket {
@@ -167,7 +232,18 @@ impl Parser {
 
     // 표현식 파싱 (우선순위: or < and < 비교 < 덧뺄셈 < 곱나눗셈 < 단항 < primary)
     fn parse_expr(&mut self) -> Expr {
-        self.parse_or()
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            self.errors.push(format!(
+                "Expression nesting too deep (>{}) at line {}:{}",
+                MAX_DEPTH, self.current_line(), self.current_col()
+            ));
+            self.depth -= 1;
+            return Expr::IntLit(0);
+        }
+        let result = self.parse_or();
+        self.depth -= 1;
+        result
     }
 
     fn parse_or(&mut self) -> Expr {
@@ -315,14 +391,23 @@ impl Parser {
                 self.expect(&Token::RParen);
                 e
             }
-            t => panic!(
-                "Unexpected token in expression: {:?} at line {}:{}",
-                t,
-                self.current_line(),
-                self.current_col()
-            ),
+            t => {
+                self.errors.push(format!(
+                    "Unexpected token in expression: {:?} at line {}:{}",
+                    t,
+                    self.current_line(),
+                    self.current_col()
+                ));
+                self.advance();
+                Expr::IntLit(0) // fallback
+            },
         };
-        // 후위: 인덱스 접근 expr[index], 타입 캐스팅 expr as ty
+        expr = self.parse_postfix_expr(expr);
+        expr
+    }
+
+    // 후위: 인덱스 접근 expr[index], 타입 캐스팅 expr as ty, 멤버 접근/메서드 호출
+    fn parse_postfix_expr(&mut self, mut expr: Expr) -> Expr {
         loop {
             match self.current() {
                 Token::LBracket => {
@@ -338,13 +423,150 @@ impl Parser {
                 }
                 Token::Dot => {
                     self.advance();
-                    let field = self.eat_ident();
-                    expr = Expr::FieldAccess { base: Box::new(expr), field };
+                    let member = self.eat_ident();
+                    if self.current() == &Token::LParen {
+                        self.advance();
+                        let mut args = Vec::new();
+                        while self.current() != &Token::RParen {
+                            args.push(self.parse_expr());
+                            if self.current() == &Token::Comma { self.advance(); }
+                        }
+                        self.expect(&Token::RParen);
+                        expr = Expr::MethodCall { base: Box::new(expr), method: member, args };
+                    } else {
+                        expr = Expr::FieldAccess { base: Box::new(expr), field: member };
+                    }
                 }
                 _ => break,
             }
         }
         expr
+    }
+
+    fn parse_ident_stmt(&mut self, name: String) -> Stmt {
+        // 구조체 타입 변수 선언: User u = User { ... };
+        if let Token::Ident(var_name) = self.current().clone() {
+            let ty = Ty::Struct(name);
+            self.advance();
+            self.expect(&Token::Eq);
+            let value = self.parse_expr();
+            self.expect(&Token::Semicolon);
+            return Stmt::VarDecl { ty, name: var_name, value };
+        }
+
+        // 구조체 배열 타입 변수 선언: User[] users = [...];
+        if self.current() == &Token::LBracket
+            && self.peek(1) == &Token::RBracket
+            && matches!(self.peek(2), Token::Ident(_))
+        {
+            self.expect(&Token::LBracket);
+            self.expect(&Token::RBracket);
+            let var_name = self.eat_ident();
+            self.expect(&Token::Eq);
+            let value = self.parse_expr();
+            self.expect(&Token::Semicolon);
+            return Stmt::VarDecl {
+                ty: Ty::Array(Box::new(Ty::Struct(name))),
+                name: var_name,
+                value,
+            };
+        }
+
+        let base = if self.current() == &Token::LParen {
+            // 함수 호출: name(args...)
+            self.advance();
+            let mut args = Vec::new();
+            while self.current() != &Token::RParen {
+                args.push(self.parse_expr());
+                if self.current() == &Token::Comma { self.advance(); }
+            }
+            self.expect(&Token::RParen);
+            Expr::Call { name, args }
+        } else {
+            Expr::Ident(name)
+        };
+        let expr = self.parse_postfix_expr(base);
+
+        // 복합 대입 연산자 (+=, -=, *=, /=, %=)
+        let compound_op = match self.current() {
+            Token::PlusEq => Some(BinOpKind::Add),
+            Token::MinusEq => Some(BinOpKind::Sub),
+            Token::StarEq => Some(BinOpKind::Mul),
+            Token::SlashEq => Some(BinOpKind::Div),
+            Token::PercentEq => Some(BinOpKind::Mod),
+            _ => None,
+        };
+        if let Some(op) = compound_op {
+            self.advance();
+            let value = self.parse_expr();
+            self.expect(&Token::Semicolon);
+            if let Expr::Ident(var_name) = expr {
+                return Stmt::CompoundAssign {
+                    name: var_name,
+                    op,
+                    value,
+                };
+            }
+            self.errors.push(format!(
+                "Invalid compound assignment target at line {}:{}",
+                self.current_line(),
+                self.current_col()
+            ));
+            return Stmt::ExprStmt(Expr::IntLit(0));
+        }
+
+        if self.current() == &Token::Eq {
+            self.advance();
+            let value = self.parse_expr();
+            self.expect(&Token::Semicolon);
+            return match expr {
+                Expr::Ident(var_name) => Stmt::Assign {
+                    name: var_name,
+                    value,
+                },
+                Expr::Index { array, index } => match *array {
+                    Expr::Ident(var_name) => Stmt::IndexAssign {
+                        name: var_name,
+                        index: *index,
+                        value,
+                    },
+                    _ => {
+                        self.errors.push(format!(
+                            "Invalid index assignment target at line {}:{}",
+                            self.current_line(),
+                            self.current_col()
+                        ));
+                        Stmt::ExprStmt(Expr::IntLit(0))
+                    },
+                },
+                Expr::FieldAccess { base, field } => match *base {
+                    Expr::Ident(var_name) => Stmt::FieldAssign {
+                        name: var_name,
+                        field,
+                        value,
+                    },
+                    _ => {
+                        self.errors.push(format!(
+                            "Invalid field assignment target at line {}:{}",
+                            self.current_line(),
+                            self.current_col()
+                        ));
+                        Stmt::ExprStmt(Expr::IntLit(0))
+                    },
+                },
+                _ => {
+                    self.errors.push(format!(
+                        "Invalid assignment target at line {}:{}",
+                        self.current_line(),
+                        self.current_col()
+                    ));
+                    Stmt::ExprStmt(Expr::IntLit(0))
+                },
+            };
+        }
+
+        self.expect(&Token::Semicolon);
+        Stmt::ExprStmt(expr)
     }
 
     // 구문 파싱
@@ -416,6 +638,21 @@ impl Parser {
                 self.expect(&Token::Semicolon);
                 Stmt::Print(args)
             }
+            // assert(cond) or assert(cond, "msg")
+            Token::Assert => {
+                self.advance();
+                self.expect(&Token::LParen);
+                let cond = self.parse_expr();
+                let message = if self.current() == &Token::Comma {
+                    self.advance();
+                    Some(self.parse_expr())
+                } else {
+                    None
+                };
+                self.expect(&Token::RParen);
+                self.expect(&Token::Semicolon);
+                Stmt::Assert { cond, message }
+            }
             // if
             Token::If => {
                 self.advance();
@@ -484,87 +721,39 @@ impl Parser {
             | Token::TyI8 | Token::TyI16 | Token::TyI32 | Token::TyI64
             | Token::TyU8 | Token::TyU16 | Token::TyU32 | Token::TyU64 => {
                 let ty = self.parse_ty();
-                let name = self.eat_ident();
+                let name = self.eat_var_ident();
                 self.expect(&Token::Eq);
                 let value = self.parse_expr();
                 self.expect(&Token::Semicolon);
                 Stmt::VarDecl { ty, name, value }
             }
+            // A07: auto 타입 추론
+            Token::Auto => {
+                self.advance();
+                let name = self.eat_var_ident();
+                self.expect(&Token::Eq);
+                let value = self.parse_expr();
+                self.expect(&Token::Semicolon);
+                Stmt::VarDecl { ty: Ty::Auto, name, value }
+            }
             Token::Ident(name) => {
                 self.advance();
-                // 구조체 타입 변수 선언: User u = User { ... };
-                if let Token::Ident(var_name) = self.current().clone() {
-                    let ty = Ty::Struct(name);
-                    self.advance();
-                    self.expect(&Token::Eq);
-                    let value = self.parse_expr();
-                    self.expect(&Token::Semicolon);
-                    Stmt::VarDecl { ty, name: var_name, value }
-                }
-                // 구조체 필드 대입: user.name = value;
-                else if self.current() == &Token::Dot {
-                    self.advance();
-                    let field = self.eat_ident();
-                    self.expect(&Token::Eq);
-                    let value = self.parse_expr();
-                    self.expect(&Token::Semicolon);
-                    Stmt::FieldAssign { name, field, value }
-                }
-                // 배열 인덱스 대입: arr[i] = 10;
-                else if self.current() == &Token::LBracket {
-                    self.advance();
-                    let index = self.parse_expr();
-                    self.expect(&Token::RBracket);
-                    self.expect(&Token::Eq);
-                    let value = self.parse_expr();
-                    self.expect(&Token::Semicolon);
-                    Stmt::IndexAssign { name, index, value }
-                } else {
-                    // 복합 대입 연산자 (+=, -=, *=, /=, %=)
-                    let compound_op = match self.current() {
-                        Token::PlusEq    => Some(BinOpKind::Add),
-                        Token::MinusEq   => Some(BinOpKind::Sub),
-                        Token::StarEq    => Some(BinOpKind::Mul),
-                        Token::SlashEq   => Some(BinOpKind::Div),
-                        Token::PercentEq => Some(BinOpKind::Mod),
-                        _ => None,
-                    };
-                    if let Some(op) = compound_op {
-                        self.advance();
-                        let value = self.parse_expr();
-                        self.expect(&Token::Semicolon);
-                        Stmt::CompoundAssign { name, op, value }
-                    } else if self.current() == &Token::Eq {
-                        self.advance();
-                        let value = self.parse_expr();
-                        self.expect(&Token::Semicolon);
-                        Stmt::Assign { name, value }
-                    } else if self.current() == &Token::LParen {
-                        self.advance();
-                        let mut args = Vec::new();
-                        while self.current() != &Token::RParen {
-                            args.push(self.parse_expr());
-                            if self.current() == &Token::Comma { self.advance(); }
-                        }
-                        self.expect(&Token::RParen);
-                        self.expect(&Token::Semicolon);
-                        Stmt::ExprStmt(Expr::Call { name, args })
-                    } else {
-                        panic!(
-                            "Unexpected token after ident: {:?} at line {}:{}",
-                            self.current(),
-                            self.current_line(),
-                            self.current_col()
-                        )
-                    }
-                }
+                self.parse_ident_stmt(name)
             }
-            t => panic!(
-                "Unexpected token in statement: {:?} at line {}:{}",
-                t,
-                self.current_line(),
-                self.current_col()
-            ),
+            t => {
+                self.errors.push(format!(
+                    "Unexpected token in statement: {:?} at line {}:{}",
+                    t,
+                    self.current_line(),
+                    self.current_col()
+                ));
+                // 에러 복구: 세미콜론 또는 닫는 중괄호까지 스킵
+                while !matches!(self.current(), Token::Semicolon | Token::RBrace | Token::EOF) {
+                    self.advance();
+                }
+                if self.current() == &Token::Semicolon { self.advance(); }
+                Stmt::ExprStmt(Expr::IntLit(0))
+            },
         };
         (stmt, span)
     }
@@ -599,12 +788,15 @@ impl Parser {
                 self.expect(&Token::RParen);
                 AnchorKind::Event(event_name)
             }
-            k => panic!(
-                "Unknown anchor kind: {} at line {}:{}",
-                k,
-                self.current_line(),
-                self.current_col()
-            ),
+            k => {
+                self.errors.push(format!(
+                    "Unknown anchor kind: {} at line {}:{}",
+                    k,
+                    self.current_line(),
+                    self.current_col()
+                ));
+                AnchorKind::Plain
+            },
         }
     }
 
@@ -680,13 +872,25 @@ impl Parser {
     fn parse_function(&mut self) -> (TopLevel, Span) {
         let span = self.current_span();
         self.expect(&Token::Function);
-        let name = self.eat_ident();
+        let first_name = self.eat_ident();
+        let mut method_owner: Option<String> = None;
+        let name = if self.current() == &Token::Dot {
+            self.advance();
+            let method = self.eat_ident();
+            method_owner = Some(first_name.clone());
+            format!("{}.{}", first_name, method)
+        } else {
+            first_name
+        };
         self.expect(&Token::LParen);
 
         let mut params = Vec::new();
+        if let Some(owner) = &method_owner {
+            params.push(Param { ty: Ty::Struct(owner.clone()), name: "self".to_string() });
+        }
         while self.current() != &Token::RParen {
             let ty   = self.parse_ty();
-            let pname = self.eat_ident();
+            let pname = self.eat_var_ident();
             params.push(Param { ty, name: pname });
             if self.current() == &Token::Comma { self.advance(); }
         }
@@ -703,7 +907,7 @@ impl Parser {
         let body = self.parse_body();
         self.expect(&Token::RBrace);
 
-        (TopLevel::Function { name, params, return_ty, body }, span)
+        (TopLevel::Function { name, params, return_ty, body, decorators: Vec::new() }, span)
     }
 
     // struct 선언 파싱
@@ -731,16 +935,34 @@ impl Parser {
         loop {
             match self.current() {
                 Token::EOF      => break,
-                Token::Hash     => self.skip_decorator(),
+                Token::Hash     => {
+                    // A10: decorator 수집 → 이어서 fn에 부착
+                    let dec_name = self.parse_decorator();
+                    if self.current() == &Token::Hash {
+                        // 연속 decorator — skip (이미 파싱됨)
+                        // TODO: 여러 개 decorator 지원
+                    }
+                    if self.current() == &Token::Function {
+                        let (mut tl, sp) = self.parse_function();
+                        if let TopLevel::Function { ref mut decorators, .. } = tl {
+                            decorators.push(dec_name);
+                        }
+                        items.push((tl, sp));
+                    }
+                    // decorator가 fn이 아닌 곳에 붙은 경우 무시
+                }
                 Token::At       => items.push(self.parse_anchor()),
                 Token::Function => items.push(self.parse_function()),
                 Token::Struct   => items.push(self.parse_struct()),
-                t => panic!(
-                    "Unexpected top-level token: {:?} at line {}:{}",
-                    t,
-                    self.current_line(),
-                    self.current_col()
-                ),
+                t => {
+                    self.errors.push(format!(
+                        "Unexpected top-level token: {:?} at line {}:{}",
+                        t,
+                        self.current_line(),
+                        self.current_col()
+                    ));
+                    self.advance(); // 에러 복구: 스킵
+                },
             }
         }
         Program { items }

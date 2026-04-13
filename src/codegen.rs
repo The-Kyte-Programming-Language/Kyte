@@ -14,7 +14,7 @@ use inkwell::targets::{
     Target, TargetMachine,
 };
 use inkwell::OptimizationLevel;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 pub struct Codegen<'ctx> {
@@ -27,18 +27,27 @@ pub struct Codegen<'ctx> {
     fn_return_tys: HashMap<String, Option<Ty>>,
     struct_defs: HashMap<String, Vec<StructField>>,
     struct_types: HashMap<String, StructType<'ctx>>,
+    string_globals: HashMap<String, PointerValue<'ctx>>,
+    string_global_counter: u64,
+    struct_size_cache: HashMap<String, u64>,
 
     /// 배열 길이 추적
     array_lengths: HashMap<String, u64>,
 
     /// Vault 변수 (힙 할당) 추적
     vault_vars: std::collections::HashSet<String>,
+    freed_vault_vars: std::collections::HashSet<String>,
+    vault_scope_stack: Vec<Vec<String>>,
+    break_cleanup_depth: Option<usize>,
 
     /// break 시 점프할 블록 (loop/for 용)
     break_bb: Option<BasicBlock<'ctx>>,
 
     /// Kill 시 점프할 복구 블록 스택 (anchor recovery)
     recovery_stack: Vec<BasicBlock<'ctx>>,
+
+    /// recovery_stack과 1:1 대응되는 Vault cleanup depth
+    kill_cleanup_depth_stack: Vec<usize>,
 
     /// yield 값을 저장할 alloca 스택 (anchor yield)
     yield_slot: Vec<PointerValue<'ctx>>,
@@ -49,8 +58,20 @@ pub struct Codegen<'ctx> {
     /// 앵커별 Kill 발생 횟수 슬롯
     kill_count_slot: Vec<PointerValue<'ctx>>,
 
+    /// Vault 런타임 카운터 (recovery assert용)
+    vault_live_count: Option<PointerValue<'ctx>>,
+
     /// 현재 함수
     current_fn: Option<FunctionValue<'ctx>>,
+
+    /// 디버그 모드 — overflow trap / 상세 런타임 검사 활성화
+    pub debug_mode: bool,
+
+    /// 최적화 레벨 (A03)
+    pub opt_level: OptimizationLevel,
+
+    /// 임시 문자열 힙 버퍼 (concat / to_string_ptr) 추적 — scope cleanup 시 해제 (M05)
+    string_temp_stack: Vec<Vec<PointerValue<'ctx>>>,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -68,14 +89,25 @@ impl<'ctx> Codegen<'ctx> {
             fn_return_tys: HashMap::new(),
             struct_defs: HashMap::new(),
             struct_types: HashMap::new(),
+            string_globals: HashMap::new(),
+            string_global_counter: 0,
+            struct_size_cache: HashMap::new(),
             array_lengths: HashMap::new(),
             vault_vars: std::collections::HashSet::new(),
+            freed_vault_vars: std::collections::HashSet::new(),
+            vault_scope_stack: Vec::new(),
+            break_cleanup_depth: None,
             break_bb: None,
             recovery_stack: Vec::new(),
+            kill_cleanup_depth_stack: Vec::new(),
             yield_slot: Vec::new(),
             yield_merge_bb: Vec::new(),
             kill_count_slot: Vec::new(),
+            vault_live_count: None,
             current_fn: None,
+            debug_mode: true,
+            opt_level: OptimizationLevel::None,
+            string_temp_stack: Vec::new(),
         }
     }
 
@@ -112,6 +144,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::String        => self.ptr_type().into(),
             Ty::Array(_)      => self.ptr_type().into(),
             Ty::Struct(name)  => self.struct_types[name].into(),
+            Ty::Auto          => self.i64_type().into(), // fallback — should be resolved before codegen
         }
     }
 
@@ -139,6 +172,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::String         => self.ptr_type().into(),
             Ty::Array(_)       => self.ptr_type().into(),
             Ty::Struct(name)   => self.struct_types[name].into(),
+            Ty::Auto           => self.i64_type().into(), // fallback
         }
     }
 
@@ -212,7 +246,28 @@ impl<'ctx> Codegen<'ctx> {
         temp_builder.build_alloca(llvm_ty, name).unwrap()
     }
 
-    fn type_size_bytes(&self, ty: &Ty) -> u64 {
+    fn global_string_ptr(&mut self, value: &str, prefix: &str) -> PointerValue<'ctx> {
+        if let Some(ptr) = self.string_globals.get(value).copied() {
+            return ptr;
+        }
+
+        let name = format!("{}_{}", prefix, self.string_global_counter);
+        self.string_global_counter += 1;
+        let ptr = self
+            .builder
+            .build_global_string_ptr(value, &name)
+            .unwrap()
+            .as_pointer_value();
+        self.string_globals.insert(value.to_string(), ptr);
+        ptr
+    }
+
+    fn type_size_bytes(&mut self, ty: &Ty) -> u64 {
+        let mut visiting = HashSet::new();
+        self.type_size_bytes_with_visiting(ty, &mut visiting)
+    }
+
+    fn type_size_bytes_with_visiting(&mut self, ty: &Ty, visiting: &mut HashSet<String>) -> u64 {
         match ty {
             Ty::I8  | Ty::U8  | Ty::Bool => 1,
             Ty::I16 | Ty::U16 => 2,
@@ -220,8 +275,32 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Int | Ty::I64 | Ty::U64 => 8,
             Ty::Float => 8,
             Ty::String | Ty::Array(_) => 8, // pointer size
-            Ty::Struct(_) => 8,
+            Ty::Struct(name) => self.struct_size_bytes(name, visiting),
+            Ty::Auto => 8, // fallback
         }
+    }
+
+    fn struct_size_bytes(&mut self, name: &str, visiting: &mut HashSet<String>) -> u64 {
+        if let Some(size) = self.struct_size_cache.get(name).copied() {
+            return size;
+        }
+        if !visiting.insert(name.to_string()) {
+            return 8;
+        }
+
+        let size = if let Some(fields) = self.struct_defs.get(name).cloned() {
+            let total = fields
+                .iter()
+                .map(|field| self.type_size_bytes_with_visiting(&field.ty, visiting))
+                .sum::<u64>();
+            total.max(1)
+        } else {
+            8
+        };
+
+        visiting.remove(name);
+        self.struct_size_cache.insert(name.to_string(), size);
+        size
     }
 
     fn struct_field_info(&self, sname: &str, field: &str) -> Option<(u32, Ty)> {
@@ -260,15 +339,243 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    fn free_vault_var(&self, name: &str) {
-        if self.vault_vars.contains(name) {
-            let ptr = self.variables[name];
-            let heap_ptr = self.builder
+    fn free_vault_var(&mut self, name: &str) {
+        if !self.vault_vars.contains(name) {
+            return;
+        }
+        if self.freed_vault_vars.contains(name) {
+            return;
+        }
+        if let Some(ptr) = self.variables.get(name).copied() {
+            let heap_ptr = self
+                .builder
                 .build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
                 .unwrap()
                 .into_pointer_value();
             let free_fn = self.module.get_function("free").unwrap();
             self.builder.build_call(free_fn, &[heap_ptr.into()], "").unwrap();
+            self.builder
+                .build_store(ptr, self.ptr_type().const_null())
+                .unwrap();
+            self.freed_vault_vars.insert(name.to_string());
+            // 런타임 vault 카운터 감소
+            if let Some(counter) = self.vault_live_count {
+                let cur = self.builder.build_load(self.i64_type(), counter, "vlc").unwrap().into_int_value();
+                let next = self.builder.build_int_sub(cur, self.i64_type().const_int(1, false), "vlc_dec").unwrap();
+                self.builder.build_store(counter, next).unwrap();
+            }
+        }
+    }
+
+    fn register_vault_in_current_scope(&mut self, name: &str) {
+        if let Some(scope) = self.vault_scope_stack.last_mut() {
+            scope.push(name.to_string());
+        }
+    }
+
+    /// 앵커 진입 시 vault 런타임 카운터를 저장
+    fn save_vault_count(&mut self, label: &str) -> Option<PointerValue<'ctx>> {
+        if let Some(counter) = self.vault_live_count {
+            let alloca = self.build_alloca(&format!("{}_exp_vaults", label), &Ty::I64);
+            let cur = self.builder
+                .build_load(self.i64_type(), counter, "vault_save")
+                .unwrap();
+            self.builder.build_store(alloca, cur).unwrap();
+            Some(alloca)
+        } else {
+            None
+        }
+    }
+
+    /// recovery 블록 진입 시 vault 카운터 assert 검증
+    fn emit_recovery_vault_assert(
+        &mut self,
+        merge_bb: BasicBlock<'ctx>,
+        expected_alloca: Option<PointerValue<'ctx>>,
+        anchor_name: &str,
+    ) {
+        if let (Some(counter), Some(expected_ptr)) = (self.vault_live_count, expected_alloca) {
+            let actual = self.builder
+                .build_load(self.i64_type(), counter, "actual_vaults")
+                .unwrap()
+                .into_int_value();
+            let expected = self.builder
+                .build_load(self.i64_type(), expected_ptr, "expected_vaults")
+                .unwrap()
+                .into_int_value();
+            let ok = self.builder
+                .build_int_compare(IntPredicate::EQ, actual, expected, "vault_check")
+                .unwrap();
+            let func = self.current_fn.unwrap();
+            let ok_bb = self.context.append_basic_block(func, &format!("vault_ok_{}", anchor_name));
+            let fail_bb = self.context.append_basic_block(func, &format!("vault_fail_{}", anchor_name));
+            self.builder.build_conditional_branch(ok, ok_bb, fail_bb).unwrap();
+
+            self.builder.position_at_end(fail_bb);
+            let printf = self.module.get_function("printf").unwrap();
+            let fmt = self.global_string_ptr(
+                "VAULT INTEGRITY ASSERT: count mismatch at recovery '%s'\n",
+                "vault_assert_fmt",
+            );
+            let name_ptr = self.global_string_ptr(anchor_name, &format!("anc_{}", anchor_name));
+            self.builder.build_call(printf, &[fmt.into(), name_ptr.into()], "").unwrap();
+            let exit_fn = self.module.get_function("exit").unwrap();
+            self.builder.build_call(
+                exit_fn,
+                &[self.context.i32_type().const_int(1, false).into()],
+                "",
+            ).unwrap();
+            self.builder.build_unreachable().unwrap();
+
+            self.builder.position_at_end(ok_bb);
+        }
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+    }
+
+    fn emit_null_check(&mut self, ptr: PointerValue<'ctx>, label: &str) {
+        let func = self.current_fn.unwrap();
+        let is_null = self.builder.build_is_null(ptr, &format!("{}_null", label)).unwrap();
+        let ok_bb = self.context.append_basic_block(func, &format!("{}_ok", label));
+        let fail_bb = self.context.append_basic_block(func, &format!("{}_oom", label));
+        self.builder.build_conditional_branch(is_null, fail_bb, ok_bb).unwrap();
+
+        self.builder.position_at_end(fail_bb);
+        self.declare_printf();
+        let printf = self.module.get_function("printf").unwrap();
+        let fmt = self.global_string_ptr(
+            "fatal: out of memory at %s\\n",
+            "oom_fmt",
+        );
+        let loc = self.global_string_ptr(label, &format!("oom_loc_{}", label));
+        self.builder.build_call(printf, &[fmt.into(), loc.into()], "").unwrap();
+        let exit_fn = self.module.get_function("exit").unwrap();
+        self.builder.build_call(
+            exit_fn,
+            &[self.context.i32_type().const_int(1, false).into()],
+            "",
+        ).unwrap();
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_bb);
+    }
+
+    /// signed 정수 Add/Sub/Mul overflow 감지 — debug_mode 전용 (H05)
+    /// `op_name`: "sadd", "ssub", "smul"
+    fn emit_overflow_check(
+        &mut self,
+        li: inkwell::values::IntValue<'ctx>,
+        ri: inkwell::values::IntValue<'ctx>,
+        op_name: &str,
+        result_name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        use inkwell::intrinsics::Intrinsic;
+        let int_ty = li.get_type();
+        let intrinsic_name = format!("llvm.{}.with.overflow", op_name);
+        if let Some(intrinsic) = Intrinsic::find(&intrinsic_name) {
+            let fn_val = intrinsic
+                .get_declaration(&self.module, &[int_ty.into()])
+                .expect("overflow intrinsic declaration");
+
+            let call = self.builder
+                .build_call(fn_val, &[li.into(), ri.into()], &format!("{}_ovf", op_name))
+                .unwrap();
+            let struct_val = call.try_as_basic_value().basic().unwrap().into_struct_value();
+
+            let result = self.builder
+                .build_extract_value(struct_val, 0, result_name)
+                .unwrap()
+                .into_int_value();
+            let overflow = self.builder
+                .build_extract_value(struct_val, 1, &format!("{}_ovf_flag", op_name))
+                .unwrap()
+                .into_int_value();
+
+            let func = self.current_fn.unwrap();
+            let ok_bb = self.context.append_basic_block(func, &format!("{}_ok", op_name));
+            let fail_bb = self.context.append_basic_block(func, &format!("{}_overflow", op_name));
+            self.builder.build_conditional_branch(overflow, fail_bb, ok_bb).unwrap();
+
+            self.builder.position_at_end(fail_bb);
+            self.declare_printf();
+            let printf = self.module.get_function("printf").unwrap();
+            let fmt = self.global_string_ptr(
+                "runtime error: integer overflow in arithmetic operation\\n",
+                "overflow_msg",
+            );
+            self.builder.build_call(printf, &[fmt.into()], "").unwrap();
+            let exit_fn = self.module.get_function("exit").unwrap();
+            self.builder.build_call(
+                exit_fn,
+                &[self.context.i32_type().const_int(1, false).into()],
+                "",
+            ).unwrap();
+            self.builder.build_unreachable().unwrap();
+
+            self.builder.position_at_end(ok_bb);
+            result.into()
+        } else {
+            // fallback: intrinsic 없을 경우 일반 연산
+            match op_name {
+                "sadd" => self.builder.build_int_add(li, ri, result_name).unwrap().into(),
+                "ssub" => self.builder.build_int_sub(li, ri, result_name).unwrap().into(),
+                _      => self.builder.build_int_mul(li, ri, result_name).unwrap().into(),
+            }
+        }
+    }
+
+    fn emit_bounds_check(&mut self, idx: inkwell::values::IntValue<'ctx>, arr_len: u64, arr_name: &str) {
+        let func = self.current_fn.unwrap();
+        let len_val = self.i64_type().const_int(arr_len, false);
+        // idx < 0 || idx >= len
+        let neg = self.builder
+            .build_int_compare(IntPredicate::SLT, idx, self.i64_type().const_int(0, false), "idx_neg")
+            .unwrap();
+        let over = self.builder
+            .build_int_compare(IntPredicate::SGE, idx, len_val, "idx_over")
+            .unwrap();
+        let oob = self.builder.build_or(neg, over, "idx_oob").unwrap();
+        let ok_bb = self.context.append_basic_block(func, "bounds_ok");
+        let fail_bb = self.context.append_basic_block(func, "bounds_fail");
+        self.builder.build_conditional_branch(oob, fail_bb, ok_bb).unwrap();
+
+        self.builder.position_at_end(fail_bb);
+        let printf = self.module.get_function("printf").unwrap();
+        let fmt = self.global_string_ptr(
+            "runtime error: array '%s' index %lld out of bounds (length %lld)\\n",
+            "oob_fmt",
+        );
+        let name_ptr = self.global_string_ptr(arr_name, &format!("arr_name_{}", arr_name));
+        self.builder.build_call(printf, &[fmt.into(), name_ptr.into(), idx.into(), len_val.into()], "").unwrap();
+        let exit_fn = self.module.get_function("exit").unwrap();
+        self.builder.build_call(
+            exit_fn,
+            &[self.context.i32_type().const_int(1, false).into()],
+            "",
+        ).unwrap();
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_bb);
+    }
+
+    fn cleanup_current_scope(&mut self) {
+        if let Some(names) = self.vault_scope_stack.pop() {
+            for name in names.into_iter().rev() {
+                self.free_vault_var(&name);
+            }
+        }
+        // M05: 임시 문자열 버퍼 해제
+        if let Some(ptrs) = self.string_temp_stack.pop() {
+            if let Some(free_fn) = self.module.get_function("free") {
+                for ptr in ptrs {
+                    self.builder.build_call(free_fn, &[ptr.into()], "").unwrap();
+                }
+            }
+        }
+    }
+
+    fn cleanup_to_depth(&mut self, target_depth: usize) {
+        while self.vault_scope_stack.len() > target_depth {
+            self.cleanup_current_scope();
         }
     }
 
@@ -320,11 +627,20 @@ impl<'ctx> Codegen<'ctx> {
 
         // 2단계: 함수 본문 생성
         for (item, _) in &program.items {
-            if let TopLevel::Function { name, params, return_ty, body } = item {
+            if let TopLevel::Function { name, params, return_ty, body, decorators: _ } = item {
                 let func = self.functions[name];
                 self.current_fn = Some(func);
+                self.vault_scope_stack.clear();
+                self.freed_vault_vars.clear();
+                self.break_cleanup_depth = None;
+                self.kill_cleanup_depth_stack.clear();
                 let entry = self.context.append_basic_block(func, "entry");
                 self.builder.position_at_end(entry);
+
+                // Vault 런타임 카운터 초기화
+                let vlc = self.build_alloca("vault_live_count", &Ty::I64);
+                self.builder.build_store(vlc, self.i64_type().const_int(0, false)).unwrap();
+                self.vault_live_count = Some(vlc);
 
                 let saved_vars = self.variables.clone();
                 let saved_types = self.var_types.clone();
@@ -364,10 +680,19 @@ impl<'ctx> Codegen<'ctx> {
                 let main_fn_type = i32_type.fn_type(&[], false);
                 let main_fn = self.module.add_function("main", main_fn_type, None);
                 self.current_fn = Some(main_fn);
+                self.vault_scope_stack.clear();
+                self.freed_vault_vars.clear();
+                self.break_cleanup_depth = None;
+                self.kill_cleanup_depth_stack.clear();
                 let entry = self.context.append_basic_block(main_fn, "entry");
                 let main_recover = self.context.append_basic_block(main_fn, "recover_main");
                 let main_after = self.context.append_basic_block(main_fn, "after_main");
                 self.builder.position_at_end(entry);
+
+                // Vault 런타임 카운터 초기화
+                let vlc = self.build_alloca("vault_live_count", &Ty::I64);
+                self.builder.build_store(vlc, self.i64_type().const_int(0, false)).unwrap();
+                self.vault_live_count = Some(vlc);
 
                 let main_yield = self.build_alloca("main_yield", &Ty::I64);
                 self.builder.build_store(main_yield, self.i64_type().const_int(0, false)).unwrap();
@@ -375,9 +700,12 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.build_store(main_kill_count, self.i64_type().const_int(0, false)).unwrap();
 
                 self.recovery_stack.push(main_recover);
+                self.kill_cleanup_depth_stack.push(self.vault_scope_stack.len());
                 self.yield_slot.push(main_yield);
                 self.yield_merge_bb.push(main_after);
                 self.kill_count_slot.push(main_kill_count);
+
+                let main_exp_vaults = self.save_vault_count("main");
 
                 self.compile_stmts(body, &[]);
 
@@ -398,9 +726,12 @@ impl<'ctx> Codegen<'ctx> {
                         self.builder.position_at_end(child_bb);
 
                         self.recovery_stack.push(child_recover);
+                        self.kill_cleanup_depth_stack.push(self.vault_scope_stack.len());
                         self.yield_slot.push(yield_alloca);
                         self.yield_merge_bb.push(child_merge);
                         self.kill_count_slot.push(kill_count_alloca);
+
+                        let child_exp_vaults = self.save_vault_count(child_name);
 
                         self.compile_stmts(child_body, &[]);
 
@@ -421,9 +752,12 @@ impl<'ctx> Codegen<'ctx> {
                                     self.builder.position_at_end(gc_bb);
 
                                     self.recovery_stack.push(gc_recover);
+                                    self.kill_cleanup_depth_stack.push(self.vault_scope_stack.len());
                                     self.yield_slot.push(gc_yield);
                                     self.yield_merge_bb.push(gc_merge);
                                     self.kill_count_slot.push(gc_kill_count);
+
+                                    let gc_exp_vaults = self.save_vault_count(gc_name);
 
                                     self.compile_stmts(gc_body, &[]);
 
@@ -431,9 +765,10 @@ impl<'ctx> Codegen<'ctx> {
                                         self.builder.build_unconditional_branch(gc_merge).unwrap();
                                     }
                                     self.builder.position_at_end(gc_recover);
-                                    self.builder.build_unconditional_branch(gc_merge).unwrap();
+                                    self.emit_recovery_vault_assert(gc_merge, gc_exp_vaults, gc_name);
 
                                     self.recovery_stack.pop();
+                                    self.kill_cleanup_depth_stack.pop();
                                     self.yield_slot.pop();
                                     self.yield_merge_bb.pop();
                                     self.kill_count_slot.pop();
@@ -447,9 +782,10 @@ impl<'ctx> Codegen<'ctx> {
                             self.builder.build_unconditional_branch(child_merge).unwrap();
                         }
                         self.builder.position_at_end(child_recover);
-                        self.builder.build_unconditional_branch(child_merge).unwrap();
+                        self.emit_recovery_vault_assert(child_merge, child_exp_vaults, child_name);
 
                         self.recovery_stack.pop();
+                        self.kill_cleanup_depth_stack.pop();
                         self.yield_slot.pop();
                         self.yield_merge_bb.pop();
                         self.kill_count_slot.pop();
@@ -462,9 +798,10 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_unconditional_branch(main_after).unwrap();
                 }
                 self.builder.position_at_end(main_recover);
-                self.builder.build_unconditional_branch(main_after).unwrap();
+                self.emit_recovery_vault_assert(main_after, main_exp_vaults, "main");
 
                 self.recovery_stack.pop();
+                self.kill_cleanup_depth_stack.pop();
                 self.yield_slot.pop();
                 self.yield_merge_bb.pop();
                 self.kill_count_slot.pop();
@@ -508,15 +845,16 @@ impl<'ctx> Codegen<'ctx> {
     // ── 구문 목록 ──
 
     fn compile_stmts(&mut self, stmts: &[(Stmt, Span)], params: &[Param]) {
-        let mut local_vaults: Vec<String> = Vec::new();
-        let mut explicit_frees: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let start_depth = self.vault_scope_stack.len();
+        self.vault_scope_stack.push(Vec::new());
+        self.string_temp_stack.push(Vec::new());
+
         for (stmt, _) in stmts {
             self.compile_stmt(stmt, params);
 
             match stmt {
-                Stmt::VaultDecl { name, .. } => local_vaults.push(name.clone()),
-                Stmt::Free(name) => {
-                    explicit_frees.insert(name.clone());
+                Stmt::VaultDecl { name, .. } => {
+                    self.register_vault_in_current_scope(name);
                 }
                 _ => {}
             }
@@ -525,12 +863,16 @@ impl<'ctx> Codegen<'ctx> {
             if !self.no_terminator() { break; }
         }
 
+        // control-flow terminator(예: return/break)에서 이미 cleanup_to_depth가 수행되어
+        // 현재 스코프가 제거된 경우가 있으므로, 스택 깊이로 안전하게 정리한다.
+        if self.vault_scope_stack.len() == start_depth {
+            return;
+        }
+
         if self.no_terminator() {
-            for name in local_vaults {
-                if !explicit_frees.contains(&name) {
-                    self.free_vault_var(&name);
-                }
-            }
+            self.cleanup_current_scope();
+        } else {
+            self.vault_scope_stack.pop();
         }
     }
 
@@ -539,12 +881,18 @@ impl<'ctx> Codegen<'ctx> {
     fn compile_stmt(&mut self, stmt: &Stmt, params: &[Param]) {
         match stmt {
             Stmt::VarDecl { ty, name, value } => {
-                let alloca = self.build_alloca(name, ty);
+                // A07: auto 타입 추론 — codegen에서도 guess_expr_ty로 실제 타입 결정
+                let effective_ty = if *ty == Ty::Auto {
+                    self.guess_expr_ty(value, params)
+                } else {
+                    ty.clone()
+                };
+                let alloca = self.build_alloca(name, &effective_ty);
                 let val = self.compile_expr(value, params);
-                let val = self.coerce_to_ty(val, ty);
+                let val = self.coerce_to_ty(val, &effective_ty);
                 self.builder.build_store(alloca, val).unwrap();
                 self.variables.insert(name.clone(), alloca);
-                self.var_types.insert(name.clone(), ty.clone());
+                self.var_types.insert(name.clone(), effective_ty);
                 // 배열 길이 추적
                 if let Expr::ArrayLit(elems) = value {
                     self.array_lengths.insert(name.clone(), elems.len() as u64);
@@ -566,6 +914,9 @@ impl<'ctx> Codegen<'ctx> {
                 let heap_ptr = self.builder.build_call(malloc, &[size_val.into()], &format!("{}_heap", name))
                     .unwrap().try_as_basic_value().basic().unwrap().into_pointer_value();
 
+                // NULL 체크 (C03)
+                self.emit_null_check(heap_ptr, &format!("vault_{}", name));
+
                 // 값 계산 후 heap에 저장
                 let val = self.compile_expr(value, params);
                 let val = self.coerce_to_ty(val, ty);
@@ -583,6 +934,13 @@ impl<'ctx> Codegen<'ctx> {
                 self.variables.insert(name.clone(), alloca);
                 self.var_types.insert(name.clone(), ty.clone());
                 self.vault_vars.insert(name.clone());
+                self.freed_vault_vars.remove(name);
+                // 런타임 vault 카운터 증가
+                if let Some(counter) = self.vault_live_count {
+                    let cur = self.builder.build_load(self.i64_type(), counter, "vlc").unwrap().into_int_value();
+                    let next = self.builder.build_int_add(cur, self.i64_type().const_int(1, false), "vlc_inc").unwrap();
+                    self.builder.build_store(counter, next).unwrap();
+                }
                 // 배열 길이 추적
                 if let Expr::ArrayLit(elems) = value {
                     self.array_lengths.insert(name.clone(), elems.len() as u64);
@@ -599,6 +957,10 @@ impl<'ctx> Codegen<'ctx> {
                 if let Ty::Array(ref inner) = ty {
                     let data_ptr = self.load_var(name, &ty).into_pointer_value();
                     let idx = self.compile_expr(index, params).into_int_value();
+                    // 런타임 배열 범위 검사 (C04)
+                    if let Some(&arr_len) = self.array_lengths.get(name) {
+                        self.emit_bounds_check(idx, arr_len, name);
+                    }
                     let elem_llvm_ty = self.elem_llvm_type(inner);
                     let gep = unsafe {
                         self.builder.build_gep(elem_llvm_ty, data_ptr, &[idx], "idx_ptr").unwrap()
@@ -612,7 +974,14 @@ impl<'ctx> Codegen<'ctx> {
                 let ty = self.guess_var_ty(name, params);
                 if let Ty::Struct(sname) = ty {
                     if let Some((idx, field_ty)) = self.struct_field_info(&sname, field) {
-                        let base_ptr = self.variables[name];
+                        let base_ptr = if self.vault_vars.contains(name) {
+                            self.builder
+                                .build_load(self.ptr_type(), self.variables[name], &format!("{}_ptr", name))
+                                .unwrap()
+                                .into_pointer_value()
+                        } else {
+                            self.variables[name]
+                        };
                         let field_ptr = self
                             .builder
                             .build_struct_gep(self.struct_types[&sname], base_ptr, idx, "field_ptr")
@@ -633,10 +1002,12 @@ impl<'ctx> Codegen<'ctx> {
             }
 
             Stmt::Return(Some(e)) => {
+                self.cleanup_to_depth(0);
                 let val = self.compile_expr(e, params);
                 self.builder.build_return(Some(&val)).unwrap();
             }
             Stmt::Return(None) => {
+                self.cleanup_to_depth(0);
                 self.builder.build_return(None).unwrap();
             }
 
@@ -674,7 +1045,9 @@ impl<'ctx> Codegen<'ctx> {
                 let after_bb = self.context.append_basic_block(func, "after_loop");
 
                 let saved_break = self.break_bb;
+                let saved_break_depth = self.break_cleanup_depth;
                 self.break_bb = Some(after_bb);
+                self.break_cleanup_depth = Some(self.vault_scope_stack.len());
 
                 self.builder.build_unconditional_branch(loop_bb).unwrap();
                 self.builder.position_at_end(loop_bb);
@@ -684,6 +1057,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
 
                 self.break_bb = saved_break;
+                self.break_cleanup_depth = saved_break_depth;
                 self.builder.position_at_end(after_bb);
             }
 
@@ -694,7 +1068,9 @@ impl<'ctx> Codegen<'ctx> {
                 let after_bb  = self.context.append_basic_block(func, "while_after");
 
                 let saved_break = self.break_bb;
+                let saved_break_depth = self.break_cleanup_depth;
                 self.break_bb = Some(after_bb);
+                self.break_cleanup_depth = Some(self.vault_scope_stack.len());
 
                 self.builder.build_unconditional_branch(cond_bb).unwrap();
 
@@ -711,6 +1087,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
 
                 self.break_bb = saved_break;
+                self.break_cleanup_depth = saved_break_depth;
                 self.builder.position_at_end(after_bb);
             }
 
@@ -725,7 +1102,9 @@ impl<'ctx> Codegen<'ctx> {
                 let end_val   = self.compile_expr(to, params).into_int_value();
 
                 let saved_break = self.break_bb;
+                let saved_break_depth = self.break_cleanup_depth;
                 self.break_bb = Some(after_bb);
+                self.break_cleanup_depth = Some(self.vault_scope_stack.len());
 
                 // alloca for loop var
                 let alloca = self.build_alloca(var, &Ty::Int);
@@ -758,16 +1137,21 @@ impl<'ctx> Codegen<'ctx> {
                 }
 
                 self.break_bb = saved_break;
+                self.break_cleanup_depth = saved_break_depth;
                 self.builder.position_at_end(after_bb);
             }
 
             Stmt::Break => {
+                if let Some(depth) = self.break_cleanup_depth {
+                    self.cleanup_to_depth(depth);
+                }
                 if let Some(bb) = self.break_bb {
                     self.builder.build_unconditional_branch(bb).unwrap();
                 }
             }
 
             Stmt::Exit => {
+                self.cleanup_to_depth(0);
                 let exit_fn = self.module.get_function("exit").unwrap();
                 self.builder.build_call(
                     exit_fn,
@@ -784,8 +1168,14 @@ impl<'ctx> Codegen<'ctx> {
                     self.emit_print(val, Some(&ty));
                 }
                 if let Some(&recovery_bb) = self.recovery_stack.last() {
+                    let normal_depth = self
+                        .kill_cleanup_depth_stack
+                        .last()
+                        .copied()
+                        .unwrap_or(0);
                     // 같은 앵커에서 Kill 3회 이상이면 상위 앵커 복구로 승격
                     let mut target_bb = recovery_bb;
+                    let mut target_depth = normal_depth;
                     if let Some(&counter_ptr) = self.kill_count_slot.last() {
                         let cur = self.builder
                             .build_load(self.i64_type(), counter_ptr, "kill_count")
@@ -798,6 +1188,11 @@ impl<'ctx> Codegen<'ctx> {
 
                         if self.recovery_stack.len() >= 2 {
                             let escalate_bb = self.recovery_stack[self.recovery_stack.len() - 2];
+                            let escalate_depth = self
+                                .kill_cleanup_depth_stack
+                                .get(self.kill_cleanup_depth_stack.len() - 2)
+                                .copied()
+                                .unwrap_or(0);
                             let escalate_cond = self.builder
                                 .build_int_compare(
                                     IntPredicate::UGE,
@@ -819,10 +1214,16 @@ impl<'ctx> Codegen<'ctx> {
                                 .unwrap();
 
                             self.builder.position_at_end(normal_bb);
+                            self.cleanup_to_depth(normal_depth);
                             self.builder.build_unconditional_branch(recovery_bb).unwrap();
                             self.builder.position_at_end(escalated_bb);
+                            self.cleanup_to_depth(escalate_depth);
                             target_bb = escalate_bb;
+                            target_depth = escalate_depth;
                         }
+                    }
+                    if self.no_terminator() {
+                        self.cleanup_to_depth(target_depth);
                     }
                     self.builder.build_unconditional_branch(target_bb).unwrap();
                 }
@@ -853,6 +1254,32 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
 
+            Stmt::Assert { cond, message } => {
+                let cond_val = self.compile_expr(cond, params).into_int_value();
+                let func = self.current_fn.unwrap();
+                let fail_bb = self.context.append_basic_block(func, "assert_fail");
+                let ok_bb = self.context.append_basic_block(func, "assert_ok");
+                self.builder.build_conditional_branch(cond_val, ok_bb, fail_bb).unwrap();
+
+                self.builder.position_at_end(fail_bb);
+                self.declare_printf();
+                let printf = self.module.get_function("printf").unwrap();
+                if let Some(msg_expr) = message {
+                    let msg_val = self.compile_expr(msg_expr, params);
+                    let msg_ptr = self.to_string_ptr(msg_val, &self.guess_expr_ty(msg_expr, params));
+                    let fmt = self.global_string_ptr("assertion failed: %s\\n", "assert_msg_fmt");
+                    self.builder.build_call(printf, &[fmt.into(), msg_ptr.into()], "").unwrap();
+                } else {
+                    let fmt = self.global_string_ptr("assertion failed\\n", "assert_fmt");
+                    self.builder.build_call(printf, &[fmt.into()], "").unwrap();
+                }
+                let exit_fn = self.module.get_function("exit").unwrap();
+                self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
+                self.builder.build_unreachable().unwrap();
+
+                self.builder.position_at_end(ok_bb);
+            }
+
             Stmt::InlineAnchor { name, body, .. } => {
                 let func = self.current_fn.unwrap();
                 let anchor_bb = self.context.append_basic_block(func, &format!("anchor_{}", name));
@@ -870,9 +1297,12 @@ impl<'ctx> Codegen<'ctx> {
 
                 // 스택에 복구/yield 정보 push
                 self.recovery_stack.push(recovery_bb);
+                self.kill_cleanup_depth_stack.push(self.vault_scope_stack.len());
                 self.yield_slot.push(yield_alloca);
                 self.yield_merge_bb.push(merge_bb);
                 self.kill_count_slot.push(kill_count_alloca);
+
+                let inline_exp_vaults = self.save_vault_count(name);
 
                 self.compile_stmts(body, params);
 
@@ -881,13 +1311,13 @@ impl<'ctx> Codegen<'ctx> {
                     self.builder.build_unconditional_branch(merge_bb).unwrap();
                 }
 
-                // 복구 블록 — Kill이 여기로 점프
+                // 복구 블록 — Kill이 여기로 점프 + vault assert 검증
                 self.builder.position_at_end(recovery_bb);
-                // 복구 후 merge로 이동 (자원 정리 로직은 향후 확장)
-                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.emit_recovery_vault_assert(merge_bb, inline_exp_vaults, name);
 
                 // 스택 pop
                 self.recovery_stack.pop();
+                self.kill_cleanup_depth_stack.pop();
                 self.yield_slot.pop();
                 self.yield_merge_bb.pop();
                 self.kill_count_slot.pop();
@@ -903,25 +1333,25 @@ impl<'ctx> Codegen<'ctx> {
 
     // ── printf 헬퍼 ──
 
-    fn emit_print(&self, val: BasicValueEnum<'ctx>, ty: Option<&Ty>) {
+    fn emit_print(&mut self, val: BasicValueEnum<'ctx>, ty: Option<&Ty>) {
         let printf = self.module.get_function("printf").unwrap();
         match val {
             BasicValueEnum::IntValue(iv) => {
                 let width = iv.get_type().get_bit_width();
                 if width == 1 {
                     // bool(i1)
-                    let fmt = self.builder.build_global_string_ptr("%s\n", "fmt_bool").unwrap();
-                    let true_str  = self.builder.build_global_string_ptr("true", "s_true").unwrap();
-                    let false_str = self.builder.build_global_string_ptr("false", "s_false").unwrap();
+                    let fmt = self.global_string_ptr("%s\n", "fmt_bool");
+                    let true_str  = self.global_string_ptr("true", "s_true");
+                    let false_str = self.global_string_ptr("false", "s_false");
                     let selected = self.builder.build_select(
                         iv,
-                        true_str.as_pointer_value(),
-                        false_str.as_pointer_value(),
+                        true_str,
+                        false_str,
                         "sel",
                     ).unwrap();
                     self.builder.build_call(
                         printf,
-                        &[fmt.as_pointer_value().into(), selected.into()],
+                        &[fmt.into(), selected.into()],
                         "",
                     ).unwrap();
                 } else {
@@ -942,27 +1372,27 @@ impl<'ctx> Codegen<'ctx> {
                         Some(Ty::U8) | Some(Ty::U16) | Some(Ty::U32) | Some(Ty::U64)
                     );
                     let fmt_str = if is_unsigned { "%llu\n" } else { "%lld\n" };
-                    let fmt = self.builder.build_global_string_ptr(fmt_str, "fmt_int").unwrap();
+                    let fmt = self.global_string_ptr(fmt_str, "fmt_int");
                     self.builder.build_call(
                         printf,
-                        &[fmt.as_pointer_value().into(), print_val.into()],
+                        &[fmt.into(), print_val.into()],
                         "",
                     ).unwrap();
                 }
             }
             BasicValueEnum::FloatValue(fv) => {
-                let fmt = self.builder.build_global_string_ptr("%f\n", "fmt_float").unwrap();
+                let fmt = self.global_string_ptr("%f\n", "fmt_float");
                 self.builder.build_call(
                     printf,
-                    &[fmt.as_pointer_value().into(), fv.into()],
+                    &[fmt.into(), fv.into()],
                     "",
                 ).unwrap();
             }
             BasicValueEnum::PointerValue(pv) => {
-                let fmt = self.builder.build_global_string_ptr("%s\n", "fmt_str").unwrap();
+                let fmt = self.global_string_ptr("%s\n", "fmt_str");
                 self.builder.build_call(
                     printf,
-                    &[fmt.as_pointer_value().into(), pv.into()],
+                    &[fmt.into(), pv.into()],
                     "",
                 ).unwrap();
             }
@@ -981,8 +1411,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.f64_type().const_float(*f).into()
             }
             Expr::StringLit(s) => {
-                let global = self.builder.build_global_string_ptr(s, "str").unwrap();
-                global.as_pointer_value().into()
+                self.global_string_ptr(s, "str").into()
             }
             Expr::Bool(b) => {
                 self.bool_type().const_int(if *b { 1 } else { 0 }, false).into()
@@ -1052,6 +1481,24 @@ impl<'ctx> Codegen<'ctx> {
                     .basic()
                     .unwrap_or_else(|| self.i64_type().const_int(0, false).into())
             }
+            Expr::MethodCall { base, method, args } => {
+                if let Ty::Struct(sname) = self.guess_expr_ty(base, params) {
+                    let fn_name = format!("{}.{}", sname, method);
+                    if let Some(func) = self.functions.get(&fn_name).copied() {
+                        let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                        compiled_args.push(self.compile_expr(base, params).into());
+                        for a in args {
+                            compiled_args.push(self.compile_expr(a, params).into());
+                        }
+                        let call_site = self.builder.build_call(func, &compiled_args, &format!("{}_ret", fn_name)).unwrap();
+                        return call_site
+                            .try_as_basic_value()
+                            .basic()
+                            .unwrap_or_else(|| self.i64_type().const_int(0, false).into());
+                    }
+                }
+                self.i64_type().const_int(0, false).into()
+            }
 
             Expr::ArrayLit(elems) => {
                 let elem_ty = self.guess_expr_ty(&elems[0], params);
@@ -1076,8 +1523,15 @@ impl<'ctx> Codegen<'ctx> {
                     Ty::Array(inner) => *inner.clone(),
                     _ => Ty::Int,
                 };
+                // 런타임 배열 범위 검사 (C04)
+                let arr_name = if let Expr::Ident(n) = array.as_ref() { Some(n.clone()) } else { None };
                 let data_ptr = self.compile_expr(array, params).into_pointer_value();
                 let idx = self.compile_expr(index, params).into_int_value();
+                if let Some(ref n) = arr_name {
+                    if let Some(&arr_len) = self.array_lengths.get(n) {
+                        self.emit_bounds_check(idx, arr_len, n);
+                    }
+                }
                 let elem_llvm_ty = self.elem_llvm_type(&inner);
                 let gep = unsafe {
                     self.builder.build_gep(elem_llvm_ty, data_ptr, &[idx], "idx_ptr").unwrap()
@@ -1126,15 +1580,33 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    fn compile_binop(&self, op: &BinOpKind, l: BasicValueEnum<'ctx>, r: BasicValueEnum<'ctx>, ty: &Ty) -> BasicValueEnum<'ctx> {
+    fn compile_binop(&mut self, op: &BinOpKind, l: BasicValueEnum<'ctx>, r: BasicValueEnum<'ctx>, ty: &Ty) -> BasicValueEnum<'ctx> {
         if Self::is_integer_ty(ty) || matches!(ty, Ty::Array(_)) {
             let li = l.into_int_value();
             let ri = r.into_int_value();
             let signed = Self::is_signed(ty);
             match op {
-                BinOpKind::Add => self.builder.build_int_add(li, ri, "add").unwrap().into(),
-                BinOpKind::Sub => self.builder.build_int_sub(li, ri, "sub").unwrap().into(),
-                BinOpKind::Mul => self.builder.build_int_mul(li, ri, "mul").unwrap().into(),
+                BinOpKind::Add => {
+                    if signed && self.debug_mode {
+                        self.emit_overflow_check(li, ri, "sadd", "add")
+                    } else {
+                        self.builder.build_int_add(li, ri, "add").unwrap().into()
+                    }
+                }
+                BinOpKind::Sub => {
+                    if signed && self.debug_mode {
+                        self.emit_overflow_check(li, ri, "ssub", "sub")
+                    } else {
+                        self.builder.build_int_sub(li, ri, "sub").unwrap().into()
+                    }
+                }
+                BinOpKind::Mul => {
+                    if signed && self.debug_mode {
+                        self.emit_overflow_check(li, ri, "smul", "mul")
+                    } else {
+                        self.builder.build_int_mul(li, ri, "mul").unwrap().into()
+                    }
+                }
                 BinOpKind::Div => {
                     let is_zero = self.builder
                         .build_int_compare(IntPredicate::EQ, ri, ri.get_type().const_zero(), "div_zero")
@@ -1146,11 +1618,16 @@ impl<'ctx> Codegen<'ctx> {
 
                     self.builder.position_at_end(err_bb);
                     let printf = self.module.get_function("printf").unwrap();
-                    let fmt = self.builder.build_global_string_ptr("runtime error: division by zero\\n", "div_zero_msg").unwrap();
-                    self.builder.build_call(printf, &[fmt.as_pointer_value().into()], "").unwrap();
-                    let exit_fn = self.module.get_function("exit").unwrap();
-                    self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
-                    self.builder.build_unreachable().unwrap();
+                    let fmt = self.global_string_ptr("runtime error: division by zero\\n", "div_zero_msg");
+                    self.builder.build_call(printf, &[fmt.into()], "").unwrap();
+                    // M04: Kill 복구 블록이 있으면 분기, 없으면 exit
+                    if let Some(recovery_bb) = self.recovery_stack.last().copied() {
+                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
+                    } else {
+                        let exit_fn = self.module.get_function("exit").unwrap();
+                        self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
+                        self.builder.build_unreachable().unwrap();
+                    }
 
                     self.builder.position_at_end(ok_bb);
                     if signed {
@@ -1170,11 +1647,16 @@ impl<'ctx> Codegen<'ctx> {
 
                     self.builder.position_at_end(err_bb);
                     let printf = self.module.get_function("printf").unwrap();
-                    let fmt = self.builder.build_global_string_ptr("runtime error: modulo by zero\\n", "mod_zero_msg").unwrap();
-                    self.builder.build_call(printf, &[fmt.as_pointer_value().into()], "").unwrap();
-                    let exit_fn = self.module.get_function("exit").unwrap();
-                    self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
-                    self.builder.build_unreachable().unwrap();
+                    let fmt = self.global_string_ptr("runtime error: modulo by zero\\n", "mod_zero_msg");
+                    self.builder.build_call(printf, &[fmt.into()], "").unwrap();
+                    // M04: Kill 복구 블록이 있으면 분기, 없으면 exit
+                    if let Some(recovery_bb) = self.recovery_stack.last().copied() {
+                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
+                    } else {
+                        let exit_fn = self.module.get_function("exit").unwrap();
+                        self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
+                        self.builder.build_unreachable().unwrap();
+                    }
 
                     self.builder.position_at_end(ok_bb);
                     if signed {
@@ -1289,10 +1771,18 @@ impl<'ctx> Codegen<'ctx> {
         let buf = self.builder.build_call(malloc, &[total_plus1.into()], "concat_buf")
             .unwrap().try_as_basic_value().basic().unwrap().into_pointer_value();
 
-        let fmt = self.builder.build_global_string_ptr("%s%s", "concat_fmt").unwrap();
+        // NULL 체크 (C03)
+        self.emit_null_check(buf, "string_concat");
+
+        // M05: 임시 문자열 버퍼 등록 (scope cleanup 시 해제)
+        if let Some(top) = self.string_temp_stack.last_mut() {
+            top.push(buf);
+        }
+
+        let fmt = self.global_string_ptr("%s%s", "concat_fmt");
         self.builder.build_call(
             snprintf,
-            &[buf.into(), total_plus1.into(), fmt.as_pointer_value().into(), lp.into(), rp.into()],
+            &[buf.into(), total_plus1.into(), fmt.into(), lp.into(), rp.into()],
             "",
         ).unwrap();
 
@@ -1306,34 +1796,27 @@ impl<'ctx> Codegen<'ctx> {
         }
         let malloc = self.module.get_function("malloc").unwrap();
         let snprintf = self.module.get_function("snprintf").unwrap();
-        let buf_size = self.i64_type().const_int(64, false);
-        let buf = self.builder.build_call(malloc, &[buf_size.into()], "conv_buf")
-            .unwrap().try_as_basic_value().basic().unwrap().into_pointer_value();
 
-        match ty {
+        // 2-pass snprintf: 첫 번째 pass로 필요한 크기 측정
+        let null_ptr = self.ptr_type().const_null();
+        let zero_size = self.i64_type().const_int(0, false);
+
+        let (fmt_ptr, fmt_args): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum<'ctx>>) = match ty {
             Ty::Float => {
-                let fmt = self.builder.build_global_string_ptr("%f", "fmt_f2s").unwrap();
-                self.builder.build_call(
-                    snprintf,
-                    &[buf.into(), buf_size.into(), fmt.as_pointer_value().into(), val.into()],
-                    "",
-                ).unwrap();
+                let fmt = self.global_string_ptr("%f", "fmt_f2s");
+                (fmt, vec![val.into()])
             }
             Ty::Bool => {
-                let true_str  = self.builder.build_global_string_ptr("true", "s_true").unwrap();
-                let false_str = self.builder.build_global_string_ptr("false", "s_false").unwrap();
+                let true_str  = self.global_string_ptr("true", "s_true");
+                let false_str = self.global_string_ptr("false", "s_false");
                 let selected = self.builder.build_select(
                     val.into_int_value(),
-                    true_str.as_pointer_value(),
-                    false_str.as_pointer_value(),
+                    true_str,
+                    false_str,
                     "sel",
                 ).unwrap();
-                let fmt = self.builder.build_global_string_ptr("%s", "fmt_b2s").unwrap();
-                self.builder.build_call(
-                    snprintf,
-                    &[buf.into(), buf_size.into(), fmt.as_pointer_value().into(), selected.into()],
-                    "",
-                ).unwrap();
+                let fmt = self.global_string_ptr("%s", "fmt_b2s");
+                (fmt, vec![selected.into()])
             }
             _ => {
                 // 정수 타입
@@ -1349,14 +1832,39 @@ impl<'ctx> Codegen<'ctx> {
                     iv
                 };
                 let fmt_str = if is_unsigned { "%llu" } else { "%lld" };
-                let fmt = self.builder.build_global_string_ptr(fmt_str, "fmt_i2s").unwrap();
-                self.builder.build_call(
-                    snprintf,
-                    &[buf.into(), buf_size.into(), fmt.as_pointer_value().into(), print_val.into()],
-                    "",
-                ).unwrap();
+                let fmt = self.global_string_ptr(fmt_str, "fmt_i2s");
+                (fmt, vec![print_val.into()])
             }
+        };
+
+        // pass 1: snprintf(NULL, 0, fmt, ...) → 반환값 = 필요한 문자 수
+        let mut pass1_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![null_ptr.into(), zero_size.into(), fmt_ptr.into()];
+        pass1_args.extend(fmt_args.iter().cloned());
+        let needed = self.builder.build_call(snprintf, &pass1_args, "snprintf_len")
+            .unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        // needed는 i32, 확장 → i64
+        let needed_i64 = self.builder.build_int_s_extend(needed, self.i64_type(), "needed_i64").unwrap();
+        let buf_size = self.builder.build_int_add(
+            needed_i64, self.i64_type().const_int(1, false), "buf_size"
+        ).unwrap();
+
+        // malloc
+        let buf = self.builder.build_call(malloc, &[buf_size.into()], "conv_buf")
+            .unwrap().try_as_basic_value().basic().unwrap().into_pointer_value();
+
+        // NULL 체크
+        self.emit_null_check(buf, "to_string_ptr");
+
+        // M05: 임시 문자열 변환 버퍼 등록
+        if let Some(top) = self.string_temp_stack.last_mut() {
+            top.push(buf);
         }
+
+        // pass 2: snprintf(buf, buf_size, fmt, ...)
+        let mut pass2_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![buf.into(), buf_size.into(), fmt_ptr.into()];
+        pass2_args.extend(fmt_args.iter().cloned());
+        self.builder.build_call(snprintf, &pass2_args, "").unwrap();
+
         buf
     }
 
@@ -1465,6 +1973,17 @@ impl<'ctx> Codegen<'ctx> {
                     Ty::Int
                 }
             }
+            Expr::MethodCall { base, method, .. } => {
+                if let Ty::Struct(sname) = self.guess_expr_ty(base, params) {
+                    let fn_name = format!("{}.{}", sname, method);
+                    self.fn_return_tys
+                        .get(&fn_name)
+                        .and_then(|opt| opt.clone())
+                        .unwrap_or(Ty::Int)
+                } else {
+                    Ty::Int
+                }
+            }
         }
     }
 
@@ -1488,7 +2007,7 @@ impl<'ctx> Codegen<'ctx> {
             &triple,
             "generic",
             "",
-            OptimizationLevel::Default,
+            self.opt_level,
             RelocMode::Default,
             CodeModel::Default,
         ).expect("Failed to create target machine");

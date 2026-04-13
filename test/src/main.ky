@@ -1,12 +1,211 @@
-struct User {
-    string name;
-    int age;
+import "util.ky";
+
+struct Customer {
+    int tier;
+    int loyalty_points;
+    int fraud_hits;
+}
+
+fn Customer.risk_score() -> int {
+    int base = 0;
+    if (self.tier == 0) {
+        base = 40;
+    } else if (self.tier == 1) {
+        base = 25;
+    } else {
+        base = 10;
+    }
+
+    int penalty = self.fraud_hits * 15;
+    int bonus = self.loyalty_points / 50;
+    int raw = base + penalty - bonus;
+    if (raw < 0) {
+        return 0;
+    } else {
+        return raw;
+    }
+}
+
+struct CartLine {
+    int unit_price;
+    int qty;
+    int discount_bp;
+}
+
+fn CartLine.line_subtotal() -> int {
+    return self.unit_price * self.qty;
+}
+
+fn CartLine.discount_amount() -> int {
+    int gross = self.line_subtotal();
+    return (gross * self.discount_bp) / 10000;
+}
+
+fn CartLine.net_total() -> int {
+    return self.line_subtotal() - self.discount_amount();
+}
+
+struct Warehouse {
+    int pick_capacity;
+    int queue_depth;
+    int late_orders;
+}
+
+fn Warehouse.pressure_index() -> int {
+    return self.queue_depth + (self.late_orders * 3) - self.pick_capacity;
+}
+
+struct Shipment {
+    Warehouse wh;
+    int distance_km;
+    int fragile;
+    int priority;
+}
+
+fn Shipment.route_cost() -> int {
+    int base = self.distance_km * 7;
+
+    int fragile_cost = 0;
+    if (self.fragile == 1) {
+        fragile_cost = 120;
+    }
+
+    int prio_cost = self.priority * 40;
+    int pressure = self.wh.pressure_index();
+    int pressure_cost = 0;
+    if (pressure > 0) {
+        pressure_cost = pressure * 5;
+    }
+
+    return base + fragile_cost + prio_cost + pressure_cost;
+}
+
+fn moving_avg_5(int[] v) -> int {
+    int i = 0;
+    int sum = 0;
+    while (i < 5) {
+        sum = sum + v[i];
+        i = i + 1;
+    }
+    return sum / 5;
+}
+
+fn detect_spike(int[] v, int threshold) -> bool {
+    int i = 1;
+    while (i < 5) {
+        int delta = v[i] - v[i - 1];
+        if (absolute(delta) > threshold) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn normalize_score(int raw) -> int {
+    if (raw < 0) {
+        return 0;
+    } else if (raw > 100) {
+        return 100;
+    } else {
+        return raw;
+    }
+}
+
+fn price_with_tax(int amount, int tax_bp) -> int {
+    return amount + ((amount * tax_bp) / 10000);
+}
+
+fn fraud_decision(int risk, int order_total, int route_cost) -> int {
+    int blended = risk + (order_total / 20) + (route_cost / 30);
+    if (blended >= 70) {
+        return 2;
+    } else if (blended >= 45) {
+        return 1;
+    } else {
+        return 0;
+    }
 }
 
 @main(main) {
-    User u = User { name: "kyte", age: 3 };
-    print(u.name);
-    print(u.age);
-    u.age = 4;
-    print(u.age);
+    print(700);
+
+    int[] daily_sales = [120, 122, 121, 200, 124];
+    int avg_sales = moving_avg_5(daily_sales);
+    bool spike = detect_spike(daily_sales, 40);
+    print(701);
+    print(avg_sales);
+    print(spike);
+
+    CartLine line1 = CartLine { unit_price: 199, qty: 2, discount_bp: 700 };
+    CartLine line2 = CartLine { unit_price: 89, qty: 3, discount_bp: 0 };
+    int net1 = line1.net_total();
+    int net2 = line2.net_total();
+    int order_subtotal = add(net1, net2);
+    int order_total = price_with_tax(order_subtotal, 1000);
+    print(702);
+    print(net1);
+    print(net2);
+    print(order_subtotal);
+    print(order_total);
+
+    Customer c = Customer { tier: 1, loyalty_points: 340, fraud_hits: 1 };
+    int risk = c.risk_score();
+    print(703);
+    print(risk);
+
+    Warehouse w = Warehouse { pick_capacity: 25, queue_depth: 31, late_orders: 4 };
+    Shipment s = Shipment { wh: w, distance_km: 18, fragile: 1, priority: 2 };
+    int route = s.route_cost();
+    print(704);
+    print(w.pressure_index());
+    print(route);
+
+    int decision = fraud_decision(risk, order_total, route);
+    print(705);
+    print(decision);
+
+    int perf_score = normalize_score(100 - (route / 8));
+    int trust_score = normalize_score(100 - (risk * 2));
+    int margin_score = normalize_score((order_total - order_subtotal) + 35);
+    int ops_score = normalize_score((perf_score + trust_score + margin_score) / 3);
+    print(706);
+    print(perf_score);
+    print(trust_score);
+    print(margin_score);
+    print(ops_score);
+
+    int hour = 0;
+    int total_pick = 0;
+    int[] hourly_pick = [3, 5, 7, 4, 6];
+    while (hour < 5) {
+        total_pick = total_pick + hourly_pick[hour];
+        hour = hour + 1;
+    }
+    print(707);
+    print(total_pick);
+
+    int projected_next_week = add(multiply(avg_sales, 7), sum_range(0, 7));
+    print(708);
+    print(projected_next_week);
+
+    print(709);
+    string service = "risk-engine";
+    string stage = "prod";
+    string banner = "svc:" + service;
+    string route_tag = "route:" + stage;
+    string joined = banner + "|" + route_tag;
+    print(service);
+    print(stage);
+    print(banner);
+    print(route_tag);
+    print(joined);
+
+    print(710);
+    bool same_service = (service == "risk-engine");
+    bool same_stage = (stage == "dev");
+    print(same_service);
+    print(same_stage);
+
+    print(999);
 }

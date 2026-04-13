@@ -477,6 +477,13 @@ float y = x as float;\n\
 Vault int buf = 512;\n\
 free(buf);\n\
 ```",
+        "auto" => "\
+**auto** — infer the type from the initializer\n\n\
+```kyte\n\
+auto x = 42;       // int\n\
+auto name = \"hi\"; // string\n\
+auto flag = true;  // bool\n\
+```",
         _ => return None,
     };
     Some(s.into())
@@ -641,6 +648,7 @@ fn ty_str(ty: &Ty) -> String {
         Ty::U64 => "u64".to_string(),
         Ty::Array(inner) => format!("{}[]", ty_str(inner)),
         Ty::Struct(name) => name.clone(),
+        Ty::Auto => "auto".to_string(),
     }
 }
 
@@ -726,4 +734,6 @@ const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
     ("Exit",   CompletionItemKind::KEYWORD,        "Exit program"),
     ("true",   CompletionItemKind::CONSTANT,       "Boolean true"),
     ("false",  CompletionItemKind::CONSTANT,       "Boolean false"),
+    ("auto",   CompletionItemKind::KEYWORD,        "Type inference: auto x = expr;"),
+    ("assert", CompletionItemKind::FUNCTION,       "Assert condition: assert(cond);"),
 ];

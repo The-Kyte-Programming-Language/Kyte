@@ -5,6 +5,7 @@ pub struct Lexer {
     pos: usize,
     line: usize,
     col: usize,
+    pub errors: Vec<String>,
 }
 
 impl Lexer {
@@ -14,6 +15,7 @@ impl Lexer {
             pos: 0,
             line: 1,
             col: 0,
+            errors: Vec::new(),
         }
     }
 
@@ -64,6 +66,62 @@ impl Lexer {
                     Some('\\') => { s.push('\\'); self.advance(); }
                     Some('"')  => { s.push('"');  self.advance(); }
                     Some('0')  => { s.push('\0'); self.advance(); }
+                    Some('x')  => {
+                        self.advance();
+                        let mut hex = String::new();
+                        for _ in 0..2 {
+                            if let Some(c) = self.current() {
+                                if c.is_ascii_hexdigit() {
+                                    hex.push(c);
+                                    self.advance();
+                                } else { break; }
+                            }
+                        }
+                        if let Ok(val) = u8::from_str_radix(&hex, 16) {
+                            s.push(val as char);
+                        } else {
+                            self.errors.push(format!(
+                                "Invalid hex escape '\\x{}' at line {}:{}",
+                                hex, self.line, self.col
+                            ));
+                            s.push('?');
+                        }
+                    }
+                    Some('u')  => {
+                        self.advance();
+                        let has_brace = self.current() == Some('{');
+                        if has_brace { self.advance(); }
+                        let mut hex = String::new();
+                        let limit = if has_brace { 6 } else { 4 };
+                        for _ in 0..limit {
+                            if let Some(c) = self.current() {
+                                if c.is_ascii_hexdigit() {
+                                    hex.push(c);
+                                    self.advance();
+                                } else { break; }
+                            }
+                        }
+                        if has_brace {
+                            if self.current() == Some('}') { self.advance(); }
+                        }
+                        if let Ok(val) = u32::from_str_radix(&hex, 16) {
+                            if let Some(c) = char::from_u32(val) {
+                                s.push(c);
+                            } else {
+                                self.errors.push(format!(
+                                    "Invalid unicode codepoint '\\u{}' at line {}:{}",
+                                    hex, self.line, self.col
+                                ));
+                                s.push('\u{FFFD}');
+                            }
+                        } else {
+                            self.errors.push(format!(
+                                "Invalid unicode escape '\\u{}' at line {}:{}",
+                                hex, self.line, self.col
+                            ));
+                            s.push('\u{FFFD}');
+                        }
+                    }
                     Some(c)    => { s.push('\\'); s.push(c); self.advance(); }
                     None       => { s.push('\\'); }
                 }
@@ -95,9 +153,27 @@ impl Lexer {
             }
         }
         if is_float {
-            Token::FloatLit(s.parse().unwrap())
+            match s.parse::<f64>() {
+                Ok(f) => Token::FloatLit(f),
+                Err(_) => {
+                    self.errors.push(format!(
+                        "Invalid float literal '{}' at line {}:{}",
+                        s, self.line, self.col
+                    ));
+                    Token::FloatLit(0.0)
+                }
+            }
         } else {
-            Token::IntLit(s.parse().unwrap())
+            match s.parse::<i64>() {
+                Ok(n) => Token::IntLit(n),
+                Err(_) => {
+                    self.errors.push(format!(
+                        "Invalid integer literal '{}' (overflow or bad format) at line {}:{}",
+                        s, self.line, self.col
+                    ));
+                    Token::IntLit(0)
+                }
+            }
         }
     }
 
@@ -133,6 +209,8 @@ impl Lexer {
             "print"    => Token::Print,
             "as"       => Token::As,
             "struct"   => Token::Struct,
+            "auto"     => Token::Auto,
+            "assert"   => Token::Assert,
             "int"      => Token::Int,
             "float"    => Token::Float,
             "string"   => Token::String,
@@ -240,7 +318,11 @@ impl Lexer {
                                 self.advance();
                                 Token::And
                             } else {
-                                panic!("Unexpected character '&' at line {}:{} — did you mean '&&'?", start_line, start_col);
+                                self.errors.push(format!(
+                                    "Unexpected character '&' at line {}:{} — did you mean '&&'?",
+                                    start_line, start_col
+                                ));
+                                continue;
                             }
                         }
                         '|' => {
@@ -249,7 +331,11 @@ impl Lexer {
                                 self.advance();
                                 Token::Or
                             } else {
-                                panic!("Unexpected character '|' at line {}:{} — did you mean '||'?", start_line, start_col);
+                                self.errors.push(format!(
+                                    "Unexpected character '|' at line {}:{} — did you mean '||'?",
+                                    start_line, start_col
+                                ));
+                                continue;
                             }
                         }
                         '-' => {
@@ -288,7 +374,11 @@ impl Lexer {
                         _ => {
                             let c = ch;
                             self.advance();
-                            panic!("Unexpected character '{}' at line {}:{}", c, start_line, start_col);
+                            self.errors.push(format!(
+                                "Unexpected character '{}' at line {}:{}",
+                                c, start_line, start_col
+                            ));
+                            continue;
                         }
                     };
                     tokens.push((tok, start_line, start_col));

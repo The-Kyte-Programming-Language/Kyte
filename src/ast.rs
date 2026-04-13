@@ -25,6 +25,8 @@ pub enum Token {
     While,        // while
     As,           // as
     Struct,       // struct
+    Auto,         // auto (A07: 타입 추론)
+    Assert,       // assert (A10)
 
     // 타입
     Int,          // int
@@ -119,6 +121,7 @@ pub enum Ty {
     U64,
     Array(Box<Ty>),  // int[], u8[], etc.
     Struct(String),
+    Auto,           // auto (A07: 타입 추론, analyzer가 해결)
 }
 
 // 표현식
@@ -161,6 +164,11 @@ pub enum Expr {
     FieldAccess {
         base: Box<Expr>,
         field: String,
+    },
+    MethodCall {
+        base: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
     },
 }
 
@@ -249,6 +257,11 @@ pub enum Stmt {
     Free(String),
     // print(expr, ...);
     Print(Vec<Expr>),
+    // assert(cond);  assert(cond, "message");
+    Assert {
+        cond: Expr,
+        message: Option<Expr>,
+    },
     // 블록 내부 인라인 앵커
     InlineAnchor {
         name:  String,
@@ -288,6 +301,7 @@ pub enum TopLevel {
         params:     Vec<Param>,
         return_ty:  Option<Ty>,
         body:       Vec<(Stmt, Span)>,
+        decorators: Vec<String>,  // A10: #[test] 등
     },
     Struct {
         name: String,

@@ -1,33 +1,35 @@
 use inkwell::context::Context;
-use kyte::analyzer::{Analyzer, Severity};
+use inkwell::OptimizationLevel;
+use kyte::analyzer::{Analyzer, AnalyzerConfig, Severity};
 use kyte::codegen::Codegen;
 use kyte::lexer::Lexer;
 use kyte::parser::Parser;
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+unsafe fn platform_exit(code: i32) -> ! {
+    extern "system" {
+        fn ExitProcess(exit_code: u32) -> !;
+    }
+    ExitProcess(code as u32);
+}
+
+#[cfg(not(windows))]
+unsafe fn platform_exit(code: i32) -> ! {
+    extern "C" {
+        fn _exit(code: i32) -> !;
+    }
+    _exit(code);
+}
+
 fn safe_exit(code: i32) -> ! {
-    use std::io::Write;
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
-    #[cfg(windows)]
-    unsafe {
-        extern "system" {
-            fn GetCurrentProcess() -> *mut std::ffi::c_void;
-            fn TerminateProcess(handle: *mut std::ffi::c_void, exit_code: u32) -> i32;
-        }
-        TerminateProcess(GetCurrentProcess(), code as u32);
-    }
-    #[cfg(not(windows))]
-    unsafe {
-        extern "C" {
-            fn _exit(code: i32) -> !;
-        }
-        _exit(code);
-    }
-    unreachable!()
+    unsafe { platform_exit(code) }
 }
 
 fn print_banner() {
@@ -39,7 +41,24 @@ fn print_banner() {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    match args.get(1).map(|s| s.as_str()) {
+    // 플래그 파싱 (A03, A05)
+    let release    = args.iter().any(|a| a == "--release");
+    let wall       = args.iter().any(|a| a == "--Wall");
+    let werror     = args.iter().any(|a| a == "--Werror");
+    let no_unused  = args.iter().any(|a| a == "--no-unused");
+
+    let analyzer_config = AnalyzerConfig { wall, werror, no_unused };
+    let opt_level = if release {
+        OptimizationLevel::Aggressive
+    } else {
+        OptimizationLevel::None
+    };
+    let debug_mode = !release;
+
+    // 서브커맨드 추출 (플래그가 아닌 첫 번째 인자)
+    let subcommand = args.iter().skip(1).find(|a| !a.starts_with("--"));
+
+    match subcommand.map(|s| s.as_str()) {
         Some("lsp") => {
             if let Err(e) = kyte::lsp::run() {
                 eprintln!("[kyte-lsp] fatal: {e}");
@@ -57,7 +76,7 @@ fn main() {
                 eprintln!("  Error loading {}: {}", path, e);
                 safe_exit(1);
             });
-            compile_source(&source, path);
+            compile_source(&source, path, opt_level, debug_mode, &analyzer_config);
             safe_exit(0);
         }
         None => {
@@ -66,6 +85,12 @@ fn main() {
             println!("    kyte <file.ky>   Compile a Kyte source file");
             println!("    kyte lsp         Start the LSP server (stdio)");
             println!("    kyte test        Run built-in test suite");
+            println!();
+            println!("  Flags:");
+            println!("    --release        Optimize (O3) and disable overflow traps");
+            println!("    --Wall           Enable all warnings");
+            println!("    --Werror         Treat warnings as errors");
+            println!("    --no-unused      Suppress unused variable warnings");
             println!();
         }
     }
@@ -87,15 +112,23 @@ fn add(int a, int b) -> int { return a + b; }
 fn run_test(label: &str, source: &str) {
     println!("  === {} ===", label);
 
+    let mut lex = Lexer::new(source);
+    let tokens = lex.tokenize();
+
+    if !lex.errors.is_empty() {
+        for e in &lex.errors {
+            println!("  lex error: {}", e);
+        }
+    }
+
     let parse_result = catch_unwind(AssertUnwindSafe(|| {
-        let mut lex = Lexer::new(source);
-        let tokens = lex.tokenize();
         let mut par = Parser::new(tokens);
-        par.parse()
+        let program = par.parse();
+        (program, par.errors)
     }));
 
-    let ast = match parse_result {
-        Ok(ast) => ast,
+    let (ast, parse_errors) = match parse_result {
+        Ok((ast, errs)) => (ast, errs),
         Err(panic) => {
             let msg = panic
                 .downcast_ref::<String>()
@@ -107,8 +140,14 @@ fn run_test(label: &str, source: &str) {
         }
     };
 
+    if !parse_errors.is_empty() {
+        for e in &parse_errors {
+            println!("  parse error: {}", e);
+        }
+    }
+
     let errors = Analyzer::analyze(&ast, source);
-    if errors.is_empty() {
+    if errors.is_empty() && lex.errors.is_empty() && parse_errors.is_empty() {
         println!("  PASS\n");
         return;
     }
@@ -185,16 +224,26 @@ fn load_source_with_imports(entry: &str) -> Result<String, String> {
     Ok(merged)
 }
 
-fn compile_source(source: &str, label: &str) {
+fn compile_source(source: &str, label: &str, opt_level: OptimizationLevel, debug_mode: bool, analyzer_config: &AnalyzerConfig) {
     let start = std::time::Instant::now();
 
-    let ast = match catch_unwind(AssertUnwindSafe(|| {
-        let mut lex = Lexer::new(source);
-        let tokens = lex.tokenize();
+    let mut lex = Lexer::new(source);
+    let tokens = lex.tokenize();
+
+    if !lex.errors.is_empty() {
+        for e in &lex.errors {
+            eprintln!("  lex error: {}", e);
+        }
+    }
+
+    let ast_result = catch_unwind(AssertUnwindSafe(|| {
         let mut par = Parser::new(tokens);
-        par.parse()
-    })) {
-        Ok(ast) => ast,
+        let program = par.parse();
+        (program, par.errors)
+    }));
+
+    let (ast, parse_errors) = match ast_result {
+        Ok((ast, errs)) => (ast, errs),
         Err(panic) => {
             let msg = panic
                 .downcast_ref::<String>()
@@ -206,7 +255,20 @@ fn compile_source(source: &str, label: &str) {
         }
     };
 
-    let errors = Analyzer::analyze(&ast, source);
+    if !parse_errors.is_empty() {
+        for e in &parse_errors {
+            eprintln!("  parse error: {}", e);
+        }
+        println!("  build aborted: {} parse error(s)\n", parse_errors.len());
+        return;
+    }
+
+    if !lex.errors.is_empty() {
+        println!("  build aborted: {} lex error(s)\n", lex.errors.len());
+        return;
+    }
+
+    let errors = Analyzer::analyze_with_config(&ast, source, analyzer_config.clone());
     let err_count = errors
         .iter()
         .filter(|e| e.severity == Severity::Error)
@@ -221,6 +283,8 @@ fn compile_source(source: &str, label: &str) {
 
     let context = Context::create();
     let mut codegen = Codegen::new(&context);
+    codegen.opt_level = opt_level;
+    codegen.debug_mode = debug_mode;
     codegen.compile(&ast);
 
     let ir_path = if label.ends_with(".ky") {
@@ -243,6 +307,6 @@ fn compile_source(source: &str, label: &str) {
     };
     println!("  done in {}", time_str);
     println!();
-
-    safe_exit(0);
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
 }

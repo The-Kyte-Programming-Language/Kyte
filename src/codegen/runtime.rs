@@ -33,11 +33,18 @@ impl<'ctx> Codegen<'ctx> {
         }
         let i32_type = self.context.i32_type();
         let fn_type = i32_type.fn_type(
-            &[self.ptr_type().into(), self.i64_type().into(), self.ptr_type().into()],
+            &[
+                self.ptr_type().into(),
+                self.i64_type().into(),
+                self.ptr_type().into(),
+            ],
             true,
         );
-        self.module
-            .add_function("snprintf", fn_type, Some(inkwell::module::Linkage::External));
+        self.module.add_function(
+            "snprintf",
+            fn_type,
+            Some(inkwell::module::Linkage::External),
+        );
     }
 
     pub(super) fn declare_strlen(&mut self) {

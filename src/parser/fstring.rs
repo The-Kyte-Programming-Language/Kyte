@@ -3,7 +3,11 @@ use crate::parser::Parser;
 
 /// f-string raw 내용을 파싱하여 FStringPart 목록으로 변환
 /// 예: "Hello {name}, score={x+1}" -> [Literal("Hello "), Expr(Ident("name")), Literal(", score="), Expr(BinOp...)]
-pub(super) fn parse_fstring_parts(raw: &str, errors: &mut Vec<String>, line: usize) -> Vec<FStringPart> {
+pub(super) fn parse_fstring_parts(
+    raw: &str,
+    errors: &mut Vec<String>,
+    line: usize,
+) -> Vec<FStringPart> {
     let mut parts = Vec::new();
     let mut chars = raw.chars().peekable();
     let mut literal_buf = String::new();

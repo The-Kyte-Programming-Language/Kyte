@@ -1,5 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Response};
 use lsp_types::*;
@@ -19,9 +21,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (conn, io) = Connection::stdio();
 
     let caps = serde_json::to_value(ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::FULL,
-        )),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".into(), "@".into()]),
@@ -41,6 +41,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _init = conn.initialize(caps)?;
     eprintln!("[kyte-lsp] initialized");
 
+    #[allow(clippy::mutable_key_type)]
     let mut docs: HashMap<Uri, String> = HashMap::new();
 
     for msg in &conn.receiver {
@@ -67,6 +68,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 //  Notification 처리
 // ────────────────────────────────────────────────────────────
 
+#[allow(clippy::mutable_key_type)]
 fn dispatch_notification(
     conn: &Connection,
     not: &Notification,
@@ -111,6 +113,7 @@ fn dispatch_notification(
 //  Request 처리
 // ────────────────────────────────────────────────────────────
 
+#[allow(clippy::mutable_key_type)]
 fn dispatch_request(
     conn: &Connection,
     req: &lsp_server::Request,
@@ -122,67 +125,63 @@ fn dispatch_request(
             let uri = &p.text_document_position_params.text_document.uri;
             let pos = p.text_document_position_params.position;
             let result = docs.get(uri).and_then(|t| compute_hover(t, pos));
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), result),
-            ))?;
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
         "textDocument/completion" => {
             let p: CompletionParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
             let list = compute_completions(docs.get(uri).map(|s: &String| s.as_str()));
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), list),
-            ))?;
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), list)))?;
         }
         "textDocument/definition" => {
             let p: GotoDefinitionParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position_params.text_document.uri;
             let pos = p.text_document_position_params.position;
             let result = docs.get(uri).and_then(|t| compute_definition(t, pos, uri));
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), result),
-            ))?;
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
         "textDocument/references" => {
             let p: ReferenceParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
             let pos = p.text_document_position.position;
             let result = docs.get(uri).map(|t| compute_references(t, pos, uri));
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), result),
-            ))?;
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
         "textDocument/rename" => {
             let p: RenameParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
             let pos = p.text_document_position.position;
             let new_name = &p.new_name;
-            let result = docs.get(uri).and_then(|t| compute_rename(t, pos, uri, new_name));
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), result),
-            ))?;
+            let result = docs
+                .get(uri)
+                .and_then(|t| compute_rename(t, pos, uri, new_name));
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
         "textDocument/documentSymbol" => {
             let p: DocumentSymbolParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document.uri;
             let result = docs.get(uri).map(|t| compute_document_symbols(t, uri));
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), result),
-            ))?;
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
         "textDocument/signatureHelp" => {
             let p: SignatureHelpParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position_params.text_document.uri;
             let pos = p.text_document_position_params.position;
             let result = docs.get(uri).and_then(|t| compute_signature_help(t, pos));
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), result),
-            ))?;
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
         _ => {
-            conn.sender.send(Message::Response(
-                Response::new_ok(req.id.clone(), serde_json::Value::Null),
-            ))?;
+            conn.sender.send(Message::Response(Response::new_ok(
+                req.id.clone(),
+                serde_json::Value::Null,
+            )))?;
         }
     }
     Ok(())
@@ -197,7 +196,7 @@ fn send_diagnostics(
     uri: &Uri,
     text: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let diags = analyze_text(text);
+    let diags = analyze_text(uri, text);
     let params = PublishDiagnosticsParams {
         uri: uri.clone(),
         diagnostics: diags,
@@ -211,12 +210,7 @@ fn send_diagnostics(
 }
 
 fn is_import_line(line: &str) -> bool {
-    let t = line.trim();
-    if !t.starts_with("import") {
-        return false;
-    }
-    let rest = t["import".len()..].trim_start();
-    rest.starts_with('"') && rest.ends_with("\";")
+    parse_import_path(line).is_some()
 }
 
 fn preprocess_source(src: &str) -> String {
@@ -232,8 +226,106 @@ fn preprocess_source(src: &str) -> String {
     out
 }
 
-fn analyze_text(text: &str) -> Vec<Diagnostic> {
-    let src = preprocess_source(text);
+fn append_non_import_lines(src: &str, out: &mut String) {
+    for line in src.lines() {
+        if is_import_line(line) {
+            out.push('\n');
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+}
+
+fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &mut String) {
+    let canonical = match fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if !seen.insert(canonical.clone()) {
+        return;
+    }
+
+    let text = match fs::read_to_string(&canonical) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let base_dir = canonical.parent().unwrap_or_else(|| Path::new("."));
+    for line in text.lines() {
+        if let Some(rel) = parse_import_path(line) {
+            visit_import_file(&base_dir.join(rel), seen, out);
+        }
+    }
+
+    out.push_str(&format!(
+        "\n// ---- import file: {} ----\n",
+        canonical.display()
+    ));
+    append_non_import_lines(&text, out);
+}
+
+fn parse_import_path(line: &str) -> Option<String> {
+    let t = line.trim();
+    if !t.starts_with("import") {
+        return None;
+    }
+    let rest = t["import".len()..].trim_start();
+    let raw_path = rest.strip_suffix(';')?.trim();
+    if raw_path.is_empty() {
+        return None;
+    }
+    if raw_path.starts_with('"') && raw_path.ends_with('"') && raw_path.len() >= 2 {
+        return Some(raw_path[1..raw_path.len() - 1].to_string());
+    }
+    Some(raw_path.to_string())
+}
+
+fn uri_to_file_path(uri: &Uri) -> Option<PathBuf> {
+    let raw = uri.to_string();
+    if !raw.starts_with("file://") {
+        return None;
+    }
+    let mut path = raw.trim_start_matches("file://").to_string();
+    // Windows file URI: file:///C:/...
+    if path.starts_with('/') {
+        let bytes = path.as_bytes();
+        if bytes.len() > 2 && bytes[2] == b':' {
+            path.remove(0);
+        }
+    }
+    // Minimal decode for common workspace paths.
+    path = path.replace("%20", " ");
+    Some(PathBuf::from(path))
+}
+
+fn preprocess_source_with_imports(uri: &Uri, text: &str) -> (String, usize) {
+    let own_line_count = text.lines().count();
+    let mut merged = String::new();
+    append_non_import_lines(text, &mut merged);
+
+    let root_path = match uri_to_file_path(uri) {
+        Some(p) => p,
+        None => return (preprocess_source(text), own_line_count),
+    };
+    let base_dir = root_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut seen = HashSet::new();
+    if let Ok(canon) = fs::canonicalize(&root_path) {
+        seen.insert(canon);
+    }
+
+    for line in text.lines() {
+        if let Some(rel) = parse_import_path(line) {
+            visit_import_file(&base_dir.join(rel), &mut seen, &mut merged);
+        }
+    }
+
+    (merged, own_line_count)
+}
+
+fn analyze_text(uri: &Uri, text: &str) -> Vec<Diagnostic> {
+    let (src, own_line_count) = preprocess_source_with_imports(uri, text);
+    let has_main_anchor = text.contains("@") && text.contains("(main)");
     let result = catch_unwind(AssertUnwindSafe(|| {
         let mut lex = Lexer::new(&src);
         let tokens = lex.tokenize();
@@ -243,7 +335,21 @@ fn analyze_text(text: &str) -> Vec<Diagnostic> {
     }));
 
     match result {
-        Ok(errs) => errs.iter().map(to_diagnostic).collect(),
+        Ok(errs) => errs
+            .into_iter()
+            .filter(|e| {
+                // 현재 파일 라인 범위에 해당하는 진단만 표시 (import 파일 라인 제외)
+                if e.span.line > own_line_count.max(1) {
+                    return false;
+                }
+                // 라이브러리/helper 파일에서는 main 앵커 강제 진단 숨김
+                if !has_main_anchor && matches!(e.code, "E018" | "E019" | "E022") {
+                    return false;
+                }
+                true
+            })
+            .map(|e| to_diagnostic(&e))
+            .collect(),
         Err(panic) => {
             let msg = panic
                 .downcast_ref::<String>()
@@ -254,7 +360,10 @@ fn analyze_text(text: &str) -> Vec<Diagnostic> {
             vec![Diagnostic {
                 range: Range {
                     start: Position { line, character },
-                    end: Position { line, character: character.saturating_add(1) },
+                    end: Position {
+                        line,
+                        character: character.saturating_add(1),
+                    },
                 },
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some("kyte".into()),
@@ -315,8 +424,14 @@ fn to_diagnostic(e: &CompileError) -> Diagnostic {
 
     Diagnostic {
         range: Range {
-            start: Position { line, character: col },
-            end: Position { line, character: end_col },
+            start: Position {
+                line,
+                character: col,
+            },
+            end: Position {
+                line,
+                character: end_col,
+            },
         },
         severity: Some(match e.severity {
             Severity::Error => DiagnosticSeverity::ERROR,
@@ -352,8 +467,7 @@ fn compute_hover(text: &str, pos: Position) -> Option<Hover> {
     }
     let word: String = chars[lo..hi].iter().collect();
 
-    let md = keyword_hover(&word)
-        .or_else(|| symbol_hover(text, &word))?;
+    let md = keyword_hover(&word).or_else(|| symbol_hover(text, &word))?;
 
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -361,15 +475,22 @@ fn compute_hover(text: &str, pos: Position) -> Option<Hover> {
             value: md,
         }),
         range: Some(Range {
-            start: Position { line: pos.line, character: lo as u32 },
-            end: Position { line: pos.line, character: hi as u32 },
+            start: Position {
+                line: pos.line,
+                character: lo as u32,
+            },
+            end: Position {
+                line: pos.line,
+                character: hi as u32,
+            },
         }),
     })
 }
 
 fn keyword_hover(w: &str) -> Option<String> {
     let s = match w {
-        "enum" => "\
+        "enum" => {
+            "\
 **enum** — enum type declaration\n\n\
 ```kyte\n\
 enum Color {\n\
@@ -377,8 +498,10 @@ enum Color {\n\
     Green,\n\
     Blue,\n\
 }\n\
-```",
-        "match" => "\
+```"
+        }
+        "match" => {
+            "\
 **match** — pattern matching\n\n\
 ```kyte\n\
 match color {\n\
@@ -386,89 +509,116 @@ match color {\n\
     Color.Green => { print(\"green\"); }\n\
     _ => { print(\"other\"); }\n\
 }\n\
-```",
-        "int" => "\
+```"
+        }
+        "int" => {
+            "\
 **int** — 64-bit signed integer type\n\n\
 ```kyte\n\
 int x = 42;\n\
 int y = x + 10;\n\
-```",
-        "float" => "\
+```"
+        }
+        "float" => {
+            "\
 **float** — 64-bit floating-point type\n\n\
 ```kyte\n\
 float pi = 3.14;\n\
 float r = pi * 2.0;\n\
-```",
-        "string" => "\
+```"
+        }
+        "string" => {
+            "\
 **string** — UTF-8 string type\n\n\
 ```kyte\n\
 string name = \"world\";\n\
 print(\"Hello, \" + name);\n\
-```",
-        "bool" => "\
+```"
+        }
+        "bool" => {
+            "\
 **bool** — boolean type\n\n\
 ```kyte\n\
 bool flag = true;\n\
 if flag { print(1); }\n\
-```",
-        "fn" => "\
+```"
+        }
+        "fn" => {
+            "\
 **fn** — declare a function\n\n\
 ```kyte\n\
 fn add(int a, int b) -> int {\n\
     return a + b;\n\
 }\n\
-```",
-        "struct" => "\
+```"
+        }
+        "struct" => {
+            "\
 **struct** — user-defined data type\n\n\
 ```kyte\n\
 struct User {\n\
     string name;\n\
     int age;\n\
 }\n\
-```",
-        "Vault" => "\
+```"
+        }
+        "Vault" => {
+            "\
 **Vault** — managed-memory declaration (heap-allocated)\n\n\
+Vault variables are automatically freed at scope exit.\n\n\
 ```kyte\n\
 Vault int buffer = 1024;\n\
 // ... use buffer ...\n\
-free(buffer);\n\
-```",
-        "yield" => "\
+// automatically freed when scope ends\n\
+```"
+        }
+        "yield" => {
+            "\
 **yield** — transfer data out of an anchor\n\n\
 ```kyte\n\
 @producer() {\n\
     yield 42;\n\
 }\n\
-```",
-        "print" => "\
+```"
+        }
+        "print" => {
+            "\
 **print(...)** — print values to stdout\n\n\
 ```kyte\n\
 print(42);\n\
 print(\"hello\");\n\
 print(x + y);\n\
-```",
-        "Kill" => "\
+```"
+        }
+        "Kill" => {
+            "\
 **Kill** — terminate the current anchor with recovery\n\n\
 ```kyte\n\
 @handler() {\n\
     Kill \"error occurred\";\n\
 }\n\
-```",
-        "Exit" => "\
+```"
+        }
+        "Exit" => {
+            "\
 **Exit** — exit the entire program\n\n\
 ```kyte\n\
 if error {\n\
     Exit;\n\
 }\n\
-```",
-        "return" => "\
+```"
+        }
+        "return" => {
+            "\
 **return** — return a value from a function\n\n\
 ```kyte\n\
 fn double(int n) -> int {\n\
     return n * 2;\n\
 }\n\
-```",
-        "if" => "\
+```"
+        }
+        "if" => {
+            "\
 **if** — conditional branch\n\n\
 ```kyte\n\
 if x > 10 {\n\
@@ -476,8 +626,10 @@ if x > 10 {\n\
 } else {\n\
     print(\"small\");\n\
 }\n\
-```",
-        "else" => "\
+```"
+        }
+        "else" => {
+            "\
 **else** — alternative branch\n\n\
 ```kyte\n\
 if x > 0 {\n\
@@ -485,8 +637,10 @@ if x > 0 {\n\
 } else {\n\
     print(\"non-positive\");\n\
 }\n\
-```",
-        "loop" => "\
+```"
+        }
+        "loop" => {
+            "\
 **loop** — infinite loop (use `break` to exit)\n\n\
 ```kyte\n\
 int i = 0;\n\
@@ -494,8 +648,10 @@ loop {\n\
     if i >= 10 { break; }\n\
     i += 1;\n\
 }\n\
-```",
-        "while" => "\
+```"
+        }
+        "while" => {
+            "\
 **while** — conditional loop\n\n\
 ```kyte\n\
 int i = 0;\n\
@@ -503,58 +659,77 @@ while i < 10 {\n\
     print(i);\n\
     i += 1;\n\
 }\n\
-```",
-        "for" => "\
+```"
+        }
+        "for" => {
+            "\
 **for** — range-based loop\n\n\
 ```kyte\n\
 for i in 0..5 {\n\
     print(i);  // 0, 1, 2, 3, 4\n\
 }\n\
-```",
-        "break" => "\
+```"
+        }
+        "break" => {
+            "\
 **break** — exit the innermost loop\n\n\
 ```kyte\n\
 loop {\n\
     if done { break; }\n\
 }\n\
-```",
-        "true" => "\
+```"
+        }
+        "true" => {
+            "\
 **true** — boolean literal\n\n\
 ```kyte\n\
 bool active = true;\n\
-```",
-        "false" => "\
+```"
+        }
+        "false" => {
+            "\
 **false** — boolean literal\n\n\
 ```kyte\n\
 bool done = false;\n\
-```",
-        "as" => "\
+```"
+        }
+        "as" => {
+            "\
 **as** — type casting\n\n\
 ```kyte\n\
 int x = 42;\n\
 float y = x as float;\n\
-```",
-        "import" => "\
+```"
+        }
+        "import" => {
+            "\
     **import** — include another Kyte source file\n\n\
     ```kyte\n\
     import \"util.ky\";\n\
     @main(main) {\n\
         print(add(1, 2));\n\
     }\n\
-    ```",
-        "free" => "\
-**free(name)** — release Vault memory\n\n\
+    ```"
+        }
+        "free" => {
+            "\
+~~**free(name)**~~ — **deprecated** (E033)\n\n\
+Manual `free()` is no longer allowed.\n\
+Vault variables are automatically freed at scope exit.\n\n\
 ```kyte\n\
 Vault int buf = 512;\n\
-free(buf);\n\
-```",
-        "auto" => "\
+// buf is automatically freed when scope ends\n\
+```"
+        }
+        "auto" => {
+            "\
 **auto** — infer the type from the initializer\n\n\
 ```kyte\n\
 auto x = 42;       // int\n\
 auto name = \"hi\"; // string\n\
 auto flag = true;  // bool\n\
-```",
+```"
+        }
         _ => return None,
     };
     Some(s.into())
@@ -570,7 +745,12 @@ fn symbol_hover(text: &str, word: &str) -> Option<String> {
 
         for (item, span) in &ast.items {
             match item {
-                TopLevel::Function { name, params, return_ty, .. } if name == word => {
+                TopLevel::Function {
+                    name,
+                    params,
+                    return_ty,
+                    ..
+                } if name == word => {
                     let ps: Vec<String> = params
                         .iter()
                         .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
@@ -604,9 +784,19 @@ fn symbol_hover(text: &str, word: &str) -> Option<String> {
     r.ok().flatten()
 }
 
-fn search_children(src: &str, children: &[(TopLevel, crate::ast::Span)], word: &str) -> Option<String> {
+fn search_children(
+    src: &str,
+    children: &[(TopLevel, crate::ast::Span)],
+    word: &str,
+) -> Option<String> {
     for (item, span) in children {
-        if let TopLevel::Anchor { name, kind, children: nested, .. } = item {
+        if let TopLevel::Anchor {
+            name,
+            kind,
+            children: nested,
+            ..
+        } = item
+        {
             if name == word {
                 let doc = extract_doc_comment(src, span.line);
                 let sig = format!("```kyte\n@{}({:?})\n```", name, kind);
@@ -647,7 +837,10 @@ fn compute_definition(text: &str, pos: Position, uri: &Uri) -> Option<GotoDefini
                     uri: uri.clone(),
                     range: Range {
                         start: Position { line, character: 0 },
-                        end: Position { line, character: word.len() as u32 + 10 },
+                        end: Position {
+                            line,
+                            character: word.len() as u32 + 10,
+                        },
                     },
                 });
             }
@@ -663,7 +856,11 @@ fn compute_definition(text: &str, pos: Position, uri: &Uri) -> Option<GotoDefini
     r.ok().flatten().map(GotoDefinitionResponse::Scalar)
 }
 
-fn find_def_in_children(children: &[(TopLevel, crate::ast::Span)], word: &str, uri: &Uri) -> Option<Location> {
+fn find_def_in_children(
+    children: &[(TopLevel, crate::ast::Span)],
+    word: &str,
+    uri: &Uri,
+) -> Option<Location> {
     for (item, span) in children {
         let found = match item {
             TopLevel::Function { name, .. } if name == word => true,
@@ -678,11 +875,17 @@ fn find_def_in_children(children: &[(TopLevel, crate::ast::Span)], word: &str, u
                 uri: uri.clone(),
                 range: Range {
                     start: Position { line, character: 0 },
-                    end: Position { line, character: word.len() as u32 + 10 },
+                    end: Position {
+                        line,
+                        character: word.len() as u32 + 10,
+                    },
                 },
             });
         }
-        if let TopLevel::Anchor { children: nested, .. } = item {
+        if let TopLevel::Anchor {
+            children: nested, ..
+        } = item
+        {
             if let Some(loc) = find_def_in_children(nested, word, uri) {
                 return Some(loc);
             }
@@ -721,8 +924,14 @@ fn compute_references(text: &str, pos: Position, uri: &Uri) -> Vec<Location> {
                 refs.push(Location {
                     uri: uri.clone(),
                     range: Range {
-                        start: Position { line: line_idx as u32, character: abs as u32 },
-                        end: Position { line: line_idx as u32, character: after_pos as u32 },
+                        start: Position {
+                            line: line_idx as u32,
+                            character: abs as u32,
+                        },
+                        end: Position {
+                            line: line_idx as u32,
+                            character: after_pos as u32,
+                        },
                     },
                 });
             }
@@ -813,10 +1022,10 @@ fn extract_doc_comment(src: &str, fn_line: usize) -> String {
 
         if in_code {
             // 들여쓰기 4칸 제거
-            let stripped = if line.starts_with("    ") {
-                &line[4..]
-            } else if line.starts_with('\t') {
-                &line[1..]
+            let stripped = if let Some(s) = line.strip_prefix("    ") {
+                s
+            } else if let Some(s) = line.strip_prefix('\t') {
+                s
             } else {
                 line
             };
@@ -841,11 +1050,11 @@ fn ty_str(ty: &Ty) -> String {
         Ty::Float => "float".to_string(),
         Ty::String => "string".to_string(),
         Ty::Bool => "bool".to_string(),
-        Ty::I8  => "i8".to_string(),
+        Ty::I8 => "i8".to_string(),
         Ty::I16 => "i16".to_string(),
         Ty::I32 => "i32".to_string(),
         Ty::I64 => "i64".to_string(),
-        Ty::U8  => "u8".to_string(),
+        Ty::U8 => "u8".to_string(),
         Ty::U16 => "u16".to_string(),
         Ty::U32 => "u32".to_string(),
         Ty::U64 => "u64".to_string(),
@@ -856,7 +1065,10 @@ fn ty_str(ty: &Ty) -> String {
         Ty::TypeParam(name) => name.clone(),
         Ty::Fn(params, ret) => {
             let ps: Vec<String> = params.iter().map(ty_str).collect();
-            let ret_s = ret.as_deref().map(ty_str).unwrap_or_else(|| "void".to_string());
+            let ret_s = ret
+                .as_deref()
+                .map(ty_str)
+                .unwrap_or_else(|| "void".to_string());
             format!("fn({}) -> {}", ps.join(", "), ret_s)
         }
     }
@@ -892,7 +1104,10 @@ fn compute_completions(text: Option<&str>) -> CompletionList {
         }
     }
 
-    CompletionList { is_incomplete: false, items }
+    CompletionList {
+        is_incomplete: false,
+        items,
+    }
 }
 
 fn extract_fn_names(src: &str) -> Vec<(String, String)> {
@@ -903,9 +1118,21 @@ fn extract_fn_names(src: &str) -> Vec<(String, String)> {
     let ast = par.parse();
     let mut out = Vec::new();
     for (item, _) in &ast.items {
-        if let TopLevel::Function { name, params, return_ty, .. } = item {
-            let ps: Vec<String> = params.iter().map(|p| format!("{} {}", ty_str(&p.ty), p.name)).collect();
-            let ret = return_ty.as_ref().map(|t| format!(" -> {}", ty_str(t))).unwrap_or_default();
+        if let TopLevel::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        {
+            let ps: Vec<String> = params
+                .iter()
+                .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
+                .collect();
+            let ret = return_ty
+                .as_ref()
+                .map(|t| format!(" -> {}", ty_str(t)))
+                .unwrap_or_default();
             out.push((name.clone(), format!("fn({}){}", ps.join(", "), ret)));
         }
     }
@@ -913,45 +1140,133 @@ fn extract_fn_names(src: &str) -> Vec<(String, String)> {
 }
 
 const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
-    ("fn",     CompletionItemKind::KEYWORD,        "Function declaration"),
-    ("struct", CompletionItemKind::KEYWORD,        "Struct type declaration"),
-    ("int",    CompletionItemKind::TYPE_PARAMETER,  "64-bit signed integer (alias for i64)"),
-    ("float",  CompletionItemKind::TYPE_PARAMETER,  "64-bit float"),
-    ("string", CompletionItemKind::TYPE_PARAMETER,  "String type"),
-    ("bool",   CompletionItemKind::TYPE_PARAMETER,  "Boolean type"),
-    ("i8",     CompletionItemKind::TYPE_PARAMETER,  "8-bit signed integer"),
-    ("i16",    CompletionItemKind::TYPE_PARAMETER,  "16-bit signed integer"),
-    ("i32",    CompletionItemKind::TYPE_PARAMETER,  "32-bit signed integer"),
-    ("i64",    CompletionItemKind::TYPE_PARAMETER,  "64-bit signed integer"),
-    ("u8",     CompletionItemKind::TYPE_PARAMETER,  "8-bit unsigned integer"),
-    ("u16",    CompletionItemKind::TYPE_PARAMETER,  "16-bit unsigned integer"),
-    ("u32",    CompletionItemKind::TYPE_PARAMETER,  "32-bit unsigned integer"),
-    ("u64",    CompletionItemKind::TYPE_PARAMETER,  "64-bit unsigned integer"),
-    ("if",     CompletionItemKind::KEYWORD,        "Conditional"),
-    ("else",   CompletionItemKind::KEYWORD,        "Alternative branch"),
-    ("for",    CompletionItemKind::KEYWORD,        "Range loop"),
-    ("loop",   CompletionItemKind::KEYWORD,        "Infinite loop"),
-    ("while",  CompletionItemKind::KEYWORD,        "Conditional loop"),
-    ("break",  CompletionItemKind::KEYWORD,        "Exit loop"),
-    ("return", CompletionItemKind::KEYWORD,        "Return value"),
-    ("yield",  CompletionItemKind::KEYWORD,        "Transfer data out of anchor"),
-    ("Vault",  CompletionItemKind::KEYWORD,        "Managed heap memory"),
-    ("free",   CompletionItemKind::FUNCTION,       "Release Vault memory"),
-    ("print",  CompletionItemKind::FUNCTION,       "Print values to stdout"),
-    ("as",     CompletionItemKind::KEYWORD,        "Type cast: expr as type"),
-    ("import", CompletionItemKind::KEYWORD,        "Import another .ky source file"),
-    ("Kill",   CompletionItemKind::KEYWORD,        "Terminate anchor with recovery"),
-    ("Exit",   CompletionItemKind::KEYWORD,        "Exit program"),
-    ("true",   CompletionItemKind::CONSTANT,       "Boolean true"),
-    ("false",  CompletionItemKind::CONSTANT,       "Boolean false"),
-    ("auto",   CompletionItemKind::KEYWORD,        "Type inference: auto x = expr;"),
-    ("assert", CompletionItemKind::FUNCTION,       "Assert condition: assert(cond);"),
-    ("enum",   CompletionItemKind::KEYWORD,        "Enum type declaration"),
-    ("match",  CompletionItemKind::KEYWORD,        "Pattern matching: match expr { pat => { ... } }"),
-    ("trait",  CompletionItemKind::KEYWORD,        "Trait declaration"),
-    ("impl",   CompletionItemKind::KEYWORD,        "Trait implementation block"),
-    ("mod",    CompletionItemKind::KEYWORD,        "Module/namespace declaration"),
-    ("const",  CompletionItemKind::KEYWORD,        "Immutable constant variable"),
+    ("fn", CompletionItemKind::KEYWORD, "Function declaration"),
+    (
+        "struct",
+        CompletionItemKind::KEYWORD,
+        "Struct type declaration",
+    ),
+    (
+        "int",
+        CompletionItemKind::TYPE_PARAMETER,
+        "64-bit signed integer (alias for i64)",
+    ),
+    ("float", CompletionItemKind::TYPE_PARAMETER, "64-bit float"),
+    ("string", CompletionItemKind::TYPE_PARAMETER, "String type"),
+    ("bool", CompletionItemKind::TYPE_PARAMETER, "Boolean type"),
+    (
+        "i8",
+        CompletionItemKind::TYPE_PARAMETER,
+        "8-bit signed integer",
+    ),
+    (
+        "i16",
+        CompletionItemKind::TYPE_PARAMETER,
+        "16-bit signed integer",
+    ),
+    (
+        "i32",
+        CompletionItemKind::TYPE_PARAMETER,
+        "32-bit signed integer",
+    ),
+    (
+        "i64",
+        CompletionItemKind::TYPE_PARAMETER,
+        "64-bit signed integer",
+    ),
+    (
+        "u8",
+        CompletionItemKind::TYPE_PARAMETER,
+        "8-bit unsigned integer",
+    ),
+    (
+        "u16",
+        CompletionItemKind::TYPE_PARAMETER,
+        "16-bit unsigned integer",
+    ),
+    (
+        "u32",
+        CompletionItemKind::TYPE_PARAMETER,
+        "32-bit unsigned integer",
+    ),
+    (
+        "u64",
+        CompletionItemKind::TYPE_PARAMETER,
+        "64-bit unsigned integer",
+    ),
+    ("if", CompletionItemKind::KEYWORD, "Conditional"),
+    ("else", CompletionItemKind::KEYWORD, "Alternative branch"),
+    ("for", CompletionItemKind::KEYWORD, "Range loop"),
+    ("loop", CompletionItemKind::KEYWORD, "Infinite loop"),
+    ("while", CompletionItemKind::KEYWORD, "Conditional loop"),
+    ("break", CompletionItemKind::KEYWORD, "Exit loop"),
+    ("return", CompletionItemKind::KEYWORD, "Return value"),
+    (
+        "yield",
+        CompletionItemKind::KEYWORD,
+        "Transfer data out of anchor",
+    ),
+    (
+        "Vault",
+        CompletionItemKind::KEYWORD,
+        "Managed heap memory (auto-freed at scope exit)",
+    ),
+    (
+        "free",
+        CompletionItemKind::FUNCTION,
+        "⚠ Deprecated — Vault memory is now auto-freed at scope exit",
+    ),
+    (
+        "print",
+        CompletionItemKind::FUNCTION,
+        "Print values to stdout",
+    ),
+    ("as", CompletionItemKind::KEYWORD, "Type cast: expr as type"),
+    (
+        "import",
+        CompletionItemKind::KEYWORD,
+        "Import another .ky source file",
+    ),
+    (
+        "Kill",
+        CompletionItemKind::KEYWORD,
+        "Terminate anchor with recovery",
+    ),
+    ("Exit", CompletionItemKind::KEYWORD, "Exit program"),
+    ("true", CompletionItemKind::CONSTANT, "Boolean true"),
+    ("false", CompletionItemKind::CONSTANT, "Boolean false"),
+    (
+        "auto",
+        CompletionItemKind::KEYWORD,
+        "Type inference: auto x = expr;",
+    ),
+    (
+        "assert",
+        CompletionItemKind::FUNCTION,
+        "Assert condition: assert(cond);",
+    ),
+    ("enum", CompletionItemKind::KEYWORD, "Enum type declaration"),
+    (
+        "match",
+        CompletionItemKind::KEYWORD,
+        "Pattern matching: match expr { pat => { ... } }",
+    ),
+    ("trait", CompletionItemKind::KEYWORD, "Trait declaration"),
+    (
+        "impl",
+        CompletionItemKind::KEYWORD,
+        "Trait implementation block",
+    ),
+    (
+        "mod",
+        CompletionItemKind::KEYWORD,
+        "Module/namespace declaration",
+    ),
+    (
+        "const",
+        CompletionItemKind::KEYWORD,
+        "Immutable constant variable",
+    ),
 ];
 
 // ────────────────────────────────────────────────────────────
@@ -963,14 +1278,23 @@ fn compute_rename(text: &str, pos: Position, uri: &Uri, new_name: &str) -> Optio
     word_at(text, pos)?;
     // 모든 참조를 찾아 new_name으로 교체
     let refs = compute_references(text, pos, uri);
-    if refs.is_empty() { return None; }
-    let edits: Vec<TextEdit> = refs.into_iter().map(|loc| TextEdit {
-        range: loc.range,
-        new_text: new_name.to_string(),
-    }).collect();
+    if refs.is_empty() {
+        return None;
+    }
+    let edits: Vec<TextEdit> = refs
+        .into_iter()
+        .map(|loc| TextEdit {
+            range: loc.range,
+            new_text: new_name.to_string(),
+        })
+        .collect();
+    #[allow(clippy::mutable_key_type)]
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), edits);
-    Some(WorkspaceEdit { changes: Some(changes), ..Default::default() })
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        ..Default::default()
+    })
 }
 
 // ────────────────────────────────────────────────────────────
@@ -989,8 +1313,14 @@ fn compute_document_symbols(text: &str, uri: &Uri) -> Vec<SymbolInformation> {
     let mk_range = |line_1indexed: usize| -> Range {
         let ln = (line_1indexed.saturating_sub(1)) as u32;
         Range {
-            start: Position { line: ln, character: 0 },
-            end: Position { line: ln, character: lines.get(ln as usize).map(|l| l.len() as u32).unwrap_or(0) },
+            start: Position {
+                line: ln,
+                character: 0,
+            },
+            end: Position {
+                line: ln,
+                character: lines.get(ln as usize).map(|l| l.len() as u32).unwrap_or(0),
+            },
         }
     };
 
@@ -1003,7 +1333,10 @@ fn compute_document_symbols(text: &str, uri: &Uri) -> Vec<SymbolInformation> {
                     kind: SymbolKind::FUNCTION,
                     tags: None,
                     deprecated: None,
-                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    location: Location {
+                        uri: uri.clone(),
+                        range: mk_range(span.line),
+                    },
                     container_name: None,
                 });
             }
@@ -1014,7 +1347,10 @@ fn compute_document_symbols(text: &str, uri: &Uri) -> Vec<SymbolInformation> {
                     kind: SymbolKind::STRUCT,
                     tags: None,
                     deprecated: None,
-                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    location: Location {
+                        uri: uri.clone(),
+                        range: mk_range(span.line),
+                    },
                     container_name: None,
                 });
             }
@@ -1025,7 +1361,10 @@ fn compute_document_symbols(text: &str, uri: &Uri) -> Vec<SymbolInformation> {
                     kind: SymbolKind::ENUM,
                     tags: None,
                     deprecated: None,
-                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    location: Location {
+                        uri: uri.clone(),
+                        range: mk_range(span.line),
+                    },
                     container_name: None,
                 });
             }
@@ -1036,7 +1375,10 @@ fn compute_document_symbols(text: &str, uri: &Uri) -> Vec<SymbolInformation> {
                     kind: SymbolKind::INTERFACE,
                     tags: None,
                     deprecated: None,
-                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    location: Location {
+                        uri: uri.clone(),
+                        range: mk_range(span.line),
+                    },
                     container_name: None,
                 });
             }
@@ -1047,7 +1389,10 @@ fn compute_document_symbols(text: &str, uri: &Uri) -> Vec<SymbolInformation> {
                     kind: SymbolKind::MODULE,
                     tags: None,
                     deprecated: None,
-                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    location: Location {
+                        uri: uri.clone(),
+                        range: mk_range(span.line),
+                    },
                     container_name: None,
                 });
             }
@@ -1072,11 +1417,23 @@ fn compute_signature_help(text: &str, pos: Position) -> Option<SignatureHelp> {
     let paren_pos = before.rfind('(')?;
     let fn_part = before[..paren_pos].trim_end();
     // 함수 이름 추출
-    let fn_name: String = fn_part.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<String>().chars().rev().collect();
-    if fn_name.is_empty() { return None; }
+    let fn_name: String = fn_part
+        .chars()
+        .rev()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    if fn_name.is_empty() {
+        return None;
+    }
 
     // 현재 몇 번째 인수인지 쉼표 카운트
-    let active_param = before[paren_pos + 1..].chars().filter(|&c| c == ',').count() as u32;
+    let active_param = before[paren_pos + 1..]
+        .chars()
+        .filter(|&c| c == ',')
+        .count() as u32;
 
     // AST에서 함수 정의 찾기
     let src = preprocess_source(text);
@@ -1084,15 +1441,32 @@ fn compute_signature_help(text: &str, pos: Position) -> Option<SignatureHelp> {
     let mut par = Parser::new(tokens);
     let ast = par.parse();
     for (item, _) in &ast.items {
-        if let TopLevel::Function { name, params, return_ty, .. } = item {
-            if name != &fn_name { continue; }
-            let ps: Vec<String> = params.iter().map(|p| format!("{} {}", ty_str(&p.ty), p.name)).collect();
-            let ret = return_ty.as_ref().map(|t| format!(" -> {}", ty_str(t))).unwrap_or_default();
+        if let TopLevel::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        {
+            if name != &fn_name {
+                continue;
+            }
+            let ps: Vec<String> = params
+                .iter()
+                .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
+                .collect();
+            let ret = return_ty
+                .as_ref()
+                .map(|t| format!(" -> {}", ty_str(t)))
+                .unwrap_or_default();
             let label = format!("fn {}({}){}", name, ps.join(", "), ret);
-            let param_infos: Vec<ParameterInformation> = params.iter().map(|p| ParameterInformation {
-                label: ParameterLabel::Simple(format!("{} {}", ty_str(&p.ty), p.name)),
-                documentation: None,
-            }).collect();
+            let param_infos: Vec<ParameterInformation> = params
+                .iter()
+                .map(|p| ParameterInformation {
+                    label: ParameterLabel::Simple(format!("{} {}", ty_str(&p.ty), p.name)),
+                    documentation: None,
+                })
+                .collect();
             return Some(SignatureHelp {
                 signatures: vec![SignatureInformation {
                     label,

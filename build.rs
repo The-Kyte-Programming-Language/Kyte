@@ -3,13 +3,26 @@ fn main() {
     // but our LLVM installation may only have a subset of targets.
     // Generate C stubs for missing target initialization symbols.
     let missing_targets = [
-        "AMDGPU", "Hexagon", "Lanai", "LoongArch", "Mips",
-        "MSP430", "PowerPC", "Sparc", "SystemZ", "XCore",
-        "AVR", "VE",
+        "AMDGPU",
+        "Hexagon",
+        "Lanai",
+        "LoongArch",
+        "Mips",
+        "MSP430",
+        "PowerPC",
+        "Sparc",
+        "SystemZ",
+        "XCore",
+        "AVR",
+        "VE",
     ];
     let suffixes = [
-        "Target", "TargetInfo", "AsmPrinter", "AsmParser",
-        "Disassembler", "TargetMC",
+        "Target",
+        "TargetInfo",
+        "AsmPrinter",
+        "AsmParser",
+        "Disassembler",
+        "TargetMC",
     ];
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -26,5 +39,7 @@ fn main() {
     }
 
     std::fs::write(&stub_path, &code).unwrap();
-    cc::Build::new().file(&stub_path).compile("llvm_target_stubs");
+    cc::Build::new()
+        .file(&stub_path)
+        .compile("llvm_target_stubs");
 }

@@ -5,12 +5,12 @@ use kyte::ast::{Program, TopLevel};
 use kyte::codegen::Codegen;
 use kyte::lexer::Lexer;
 use kyte::parser::Parser;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 
 const C_RED: &str = "\x1b[31m";
 const C_GREEN: &str = "\x1b[32m";
@@ -42,21 +42,23 @@ fn safe_exit(code: i32) -> ! {
 }
 
 fn print_banner() {
-    println!(
-        "\n  KYTE\n  Kyte Compiler v0.1.0  ·  LLVM 21\n"
-    );
+    println!("\n  KYTE\n  Kyte Compiler v0.1.0  ·  LLVM 21\n");
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     // 플래그 파싱 (A03, A05)
-    let release    = args.iter().any(|a| a == "--release");
-    let wall       = args.iter().any(|a| a == "--Wall");
-    let werror     = args.iter().any(|a| a == "--Werror");
-    let no_unused  = args.iter().any(|a| a == "--no-unused");
+    let release = args.iter().any(|a| a == "--release");
+    let wall = args.iter().any(|a| a == "--Wall");
+    let werror = args.iter().any(|a| a == "--Werror");
+    let no_unused = args.iter().any(|a| a == "--no-unused");
 
-    let analyzer_config = AnalyzerConfig { wall, werror, no_unused };
+    let analyzer_config = AnalyzerConfig {
+        wall,
+        werror,
+        no_unused,
+    };
     let opt_level = if release {
         OptimizationLevel::Aggressive
     } else {
@@ -143,7 +145,7 @@ fn parse_expected_value(raw: &str) -> Result<ExpectedValue, String> {
     }
     // 쌍따옴표로 감싸여 있으면 string
     if v.starts_with('"') && v.ends_with('"') && v.len() >= 2 {
-        return Ok(ExpectedValue::Str(v[1..v.len()-1].to_string()));
+        return Ok(ExpectedValue::Str(v[1..v.len() - 1].to_string()));
     }
     // float 시도 (소수점 포함)
     if v.contains('.') {
@@ -155,7 +157,10 @@ fn parse_expected_value(raw: &str) -> Result<ExpectedValue, String> {
     if let Ok(n) = v.parse::<i64>() {
         return Ok(ExpectedValue::Int(n));
     }
-    Err(format!("unsupported expected value '{}': use int, float, bool, or \"string\"", raw))
+    Err(format!(
+        "unsupported expected value '{}': use int, float, bool, or \"string\"",
+        raw
+    ))
 }
 
 #[derive(Clone, Debug)]
@@ -209,7 +214,10 @@ fn values_equal(expected: &ExpectedValue, actual: &ActualValue) -> bool {
     }
 }
 
-fn collect_expected_value_results(ast: &Program, cases: &[DecoratorTestCase]) -> HashMap<String, Result<ActualValue, String>> {
+fn collect_expected_value_results(
+    ast: &Program,
+    cases: &[DecoratorTestCase],
+) -> HashMap<String, Result<ActualValue, String>> {
     let mut targets: HashMap<String, ()> = HashMap::new();
     for c in cases {
         if c.valid_signature {
@@ -228,7 +236,10 @@ fn collect_expected_value_results(ast: &Program, cases: &[DecoratorTestCase]) ->
     for name in targets.keys() {
         if let Some(fi) = all_fns.get(name) {
             let env = HashMap::new();
-            out.insert(name.clone(), eval_fn_body_env(&fi.body, &fi.ret_ty, &env, &all_fns));
+            out.insert(
+                name.clone(),
+                eval_fn_body_env(&fi.body, &fi.ret_ty, &env, &all_fns),
+            );
         } else {
             out.insert(name.clone(), Err(format!("function '{}' not found", name)));
         }
@@ -246,12 +257,25 @@ struct FnInfo {
 fn collect_all_fns(ast: &Program) -> HashMap<String, FnInfo> {
     let mut fns = HashMap::new();
     for (item, _) in &ast.items {
-        if let TopLevel::Function { name, params, body, return_ty, .. } = item {
-            fns.insert(name.clone(), FnInfo {
-                params: params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
-                ret_ty: return_ty.clone(),
-                body: body.clone(),
-            });
+        if let TopLevel::Function {
+            name,
+            params,
+            body,
+            return_ty,
+            ..
+        } = item
+        {
+            fns.insert(
+                name.clone(),
+                FnInfo {
+                    params: params
+                        .iter()
+                        .map(|p| (p.name.clone(), p.ty.clone()))
+                        .collect(),
+                    ret_ty: return_ty.clone(),
+                    body: body.clone(),
+                },
+            );
         }
     }
     fns
@@ -303,14 +327,20 @@ fn eval_stmt(
             Ok(StmtResult::Return(val))
         }
         Stmt::Return(None) => Err("test function returns void".to_string()),
-        Stmt::If { cond, then_body, else_body } => {
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
             let cond_val = eval_expr_env(cond, ret_ty, env, fns)?;
             let is_true = match &cond_val {
                 ActualValue::Bool(b) => *b,
                 ActualValue::Int(n) => *n != 0,
                 _ => return Err("if condition must be bool or int".to_string()),
             };
-            let branch = if is_true { then_body } else {
+            let branch = if is_true {
+                then_body
+            } else {
                 match else_body {
                     Some(eb) => eb,
                     None => return Ok(StmtResult::Continue),
@@ -325,10 +355,14 @@ fn eval_stmt(
             Ok(StmtResult::Continue)
         }
         Stmt::ExprStmt(_) | Stmt::Print(_) => Ok(StmtResult::Continue), // side-effect only
-        _ => Err(format!("unsupported statement in test evaluation: {:?}", std::mem::discriminant(stmt))),
+        _ => Err(format!(
+            "unsupported statement in test evaluation: {:?}",
+            std::mem::discriminant(stmt)
+        )),
     }
 }
 
+#[allow(clippy::only_used_in_recursion)]
 fn eval_expr_env(
     expr: &kyte::ast::Expr,
     hint_ty: &Option<kyte::ast::Ty>,
@@ -341,25 +375,26 @@ fn eval_expr_env(
         Expr::FloatLit(f) => Ok(ActualValue::Float(*f)),
         Expr::Bool(b) => Ok(ActualValue::Bool(*b)),
         Expr::StringLit(s) => Ok(ActualValue::Str(s.clone())),
-        Expr::Ident(name) => {
-            env.get(name)
-                .cloned()
-                .ok_or_else(|| format!("undefined variable '{}' in test evaluation", name))
-        }
-        Expr::UnaryOp { op: UnaryOpKind::Neg, expr: inner } => {
-            match eval_expr_env(inner, hint_ty, env, fns)? {
-                ActualValue::Int(n) => Ok(ActualValue::Int(-n)),
-                ActualValue::Float(f) => Ok(ActualValue::Float(-f)),
-                other => Err(format!("cannot negate {}", other)),
-            }
-        }
-        Expr::UnaryOp { op: UnaryOpKind::Not, expr: inner } => {
-            match eval_expr_env(inner, hint_ty, env, fns)? {
-                ActualValue::Bool(b) => Ok(ActualValue::Bool(!b)),
-                ActualValue::Int(n) => Ok(ActualValue::Bool(n == 0)),
-                other => Err(format!("cannot apply not to {}", other)),
-            }
-        }
+        Expr::Ident(name) => env
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("undefined variable '{}' in test evaluation", name)),
+        Expr::UnaryOp {
+            op: UnaryOpKind::Neg,
+            expr: inner,
+        } => match eval_expr_env(inner, hint_ty, env, fns)? {
+            ActualValue::Int(n) => Ok(ActualValue::Int(-n)),
+            ActualValue::Float(f) => Ok(ActualValue::Float(-f)),
+            other => Err(format!("cannot negate {}", other)),
+        },
+        Expr::UnaryOp {
+            op: UnaryOpKind::Not,
+            expr: inner,
+        } => match eval_expr_env(inner, hint_ty, env, fns)? {
+            ActualValue::Bool(b) => Ok(ActualValue::Bool(!b)),
+            ActualValue::Int(n) => Ok(ActualValue::Bool(n == 0)),
+            other => Err(format!("cannot apply not to {}", other)),
+        },
         Expr::BinOp { left, op, right } => {
             let l = eval_expr_env(left, hint_ty, env, fns)?;
             let r = eval_expr_env(right, hint_ty, env, fns)?;
@@ -368,7 +403,12 @@ fn eval_expr_env(
         Expr::Call { name, args } => {
             if let Some(fi) = fns.get(name) {
                 if fi.params.len() != args.len() {
-                    return Err(format!("function '{}' expects {} args, got {}", name, fi.params.len(), args.len()));
+                    return Err(format!(
+                        "function '{}' expects {} args, got {}",
+                        name,
+                        fi.params.len(),
+                        args.len()
+                    ));
                 }
                 let mut call_env = HashMap::new();
                 for (arg_expr, (param_name, _param_ty)) in args.iter().zip(fi.params.iter()) {
@@ -388,7 +428,11 @@ fn eval_expr_env(
     }
 }
 
-fn eval_binop(l: &ActualValue, op: &kyte::ast::BinOpKind, r: &ActualValue) -> Result<ActualValue, String> {
+fn eval_binop(
+    l: &ActualValue,
+    op: &kyte::ast::BinOpKind,
+    r: &ActualValue,
+) -> Result<ActualValue, String> {
     use kyte::ast::BinOpKind::*;
     match (l, r) {
         (ActualValue::Int(a), ActualValue::Int(b)) => match op {
@@ -396,19 +440,23 @@ fn eval_binop(l: &ActualValue, op: &kyte::ast::BinOpKind, r: &ActualValue) -> Re
             Sub => Ok(ActualValue::Int(a - b)),
             Mul => Ok(ActualValue::Int(a * b)),
             Div => {
-                if *b == 0 { return Err("division by zero".to_string()); }
+                if *b == 0 {
+                    return Err("division by zero".to_string());
+                }
                 Ok(ActualValue::Int(a / b))
             }
             Mod => {
-                if *b == 0 { return Err("modulo by zero".to_string()); }
+                if *b == 0 {
+                    return Err("modulo by zero".to_string());
+                }
                 Ok(ActualValue::Int(a % b))
             }
-            Eq  => Ok(ActualValue::Bool(a == b)),
+            Eq => Ok(ActualValue::Bool(a == b)),
             Neq => Ok(ActualValue::Bool(a != b)),
-            Lt  => Ok(ActualValue::Bool(a < b)),
-            Gt  => Ok(ActualValue::Bool(a > b)),
-            Le  => Ok(ActualValue::Bool(a <= b)),
-            Ge  => Ok(ActualValue::Bool(a >= b)),
+            Lt => Ok(ActualValue::Bool(a < b)),
+            Gt => Ok(ActualValue::Bool(a > b)),
+            Le => Ok(ActualValue::Bool(a <= b)),
+            Ge => Ok(ActualValue::Bool(a >= b)),
             _ => Err(format!("unsupported int op {:?}", op)),
         },
         (ActualValue::Float(a), ActualValue::Float(b)) => match op {
@@ -416,30 +464,34 @@ fn eval_binop(l: &ActualValue, op: &kyte::ast::BinOpKind, r: &ActualValue) -> Re
             Sub => Ok(ActualValue::Float(a - b)),
             Mul => Ok(ActualValue::Float(a * b)),
             Div => Ok(ActualValue::Float(a / b)),
-            Eq  => Ok(ActualValue::Bool((a - b).abs() < 1e-9)),
+            Eq => Ok(ActualValue::Bool((a - b).abs() < 1e-9)),
             Neq => Ok(ActualValue::Bool((a - b).abs() >= 1e-9)),
-            Lt  => Ok(ActualValue::Bool(a < b)),
-            Gt  => Ok(ActualValue::Bool(a > b)),
-            Le  => Ok(ActualValue::Bool(a <= b)),
-            Ge  => Ok(ActualValue::Bool(a >= b)),
+            Lt => Ok(ActualValue::Bool(a < b)),
+            Gt => Ok(ActualValue::Bool(a > b)),
+            Le => Ok(ActualValue::Bool(a <= b)),
+            Ge => Ok(ActualValue::Bool(a >= b)),
             _ => Err(format!("unsupported float op {:?}", op)),
         },
         (ActualValue::Bool(a), ActualValue::Bool(b)) => match op {
             And => Ok(ActualValue::Bool(*a && *b)),
-            Or  => Ok(ActualValue::Bool(*a || *b)),
-            Eq  => Ok(ActualValue::Bool(a == b)),
+            Or => Ok(ActualValue::Bool(*a || *b)),
+            Eq => Ok(ActualValue::Bool(a == b)),
             Neq => Ok(ActualValue::Bool(a != b)),
             _ => Err(format!("unsupported bool op {:?}", op)),
         },
         (ActualValue::Str(a), ActualValue::Str(b)) => match op {
             Add => Ok(ActualValue::Str(format!("{}{}", a, b))),
-            Eq  => Ok(ActualValue::Bool(a == b)),
+            Eq => Ok(ActualValue::Bool(a == b)),
             Neq => Ok(ActualValue::Bool(a != b)),
             _ => Err(format!("unsupported string op {:?}", op)),
         },
         // int ↔ float 자동 승격
-        (ActualValue::Int(a), ActualValue::Float(b)) => eval_binop(&ActualValue::Float(*a as f64), op, &ActualValue::Float(*b)),
-        (ActualValue::Float(a), ActualValue::Int(b)) => eval_binop(&ActualValue::Float(*a), op, &ActualValue::Float(*b as f64)),
+        (ActualValue::Int(a), ActualValue::Float(b)) => {
+            eval_binop(&ActualValue::Float(*a as f64), op, &ActualValue::Float(*b))
+        }
+        (ActualValue::Float(a), ActualValue::Int(b)) => {
+            eval_binop(&ActualValue::Float(*a), op, &ActualValue::Float(*b as f64))
+        }
         _ => Err("type mismatch in test evaluation".to_string()),
     }
 }
@@ -447,13 +499,14 @@ fn eval_binop(l: &ActualValue, op: &kyte::ast::BinOpKind, r: &ActualValue) -> Re
 fn eval_cast(val: ActualValue, ty: &kyte::ast::Ty) -> Result<ActualValue, String> {
     use kyte::ast::Ty;
     match ty {
-        Ty::Int | Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64 |
-        Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 => match val {
-            ActualValue::Int(n) => Ok(ActualValue::Int(n)),
-            ActualValue::Float(f) => Ok(ActualValue::Int(f as i64)),
-            ActualValue::Bool(b) => Ok(ActualValue::Int(b as i64)),
-            _ => Err("cannot cast to int".to_string()),
-        },
+        Ty::Int | Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 => {
+            match val {
+                ActualValue::Int(n) => Ok(ActualValue::Int(n)),
+                ActualValue::Float(f) => Ok(ActualValue::Int(f as i64)),
+                ActualValue::Bool(b) => Ok(ActualValue::Int(b as i64)),
+                _ => Err("cannot cast to int".to_string()),
+            }
+        }
         Ty::Float => match val {
             ActualValue::Int(n) => Ok(ActualValue::Float(n as f64)),
             ActualValue::Float(f) => Ok(ActualValue::Float(f)),
@@ -525,7 +578,9 @@ fn collect_decorator_tests(ast: &Program) -> Vec<DecoratorTestCase> {
 
 fn collect_ky_files(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(rd) = fs::read_dir(dir) else { return; };
+        let Ok(rd) = fs::read_dir(dir) else {
+            return;
+        };
         for entry in rd.flatten() {
             let p = entry.path();
             if p.is_dir() {
@@ -696,50 +751,50 @@ fn run_test(label: &str, source: &str) -> (usize, usize, usize, bool, bool) {
                                 detail: String::new(),
                             });
                         }
-                        Some(raw_expected) => {
-                            match parse_expected_value(raw_expected) {
-                                Ok(expected) => {
-                                    match expected_value_results.get(&case.name) {
-                                        Some(Ok(actual)) => {
-                                            if values_equal(&expected, actual) {
-                                                results.push(TestResultItem {
-                                                    name: case.name.clone(),
-                                                    status: TestStatus::Passed,
-                                                    detail: format!("expected {}", expected),
-                                                });
-                                            } else {
-                                                results.push(TestResultItem {
-                                                    name: case.name.clone(),
-                                                    status: TestStatus::Failed,
-                                                    detail: format!("expected {}, got {}", expected, actual),
-                                                });
-                                            }
-                                        }
-                                        Some(Err(e)) => {
-                                            results.push(TestResultItem {
-                                                name: case.name.clone(),
-                                                status: TestStatus::Failed,
-                                                detail: format!("expected-value evaluation failed: {}", e),
-                                            });
-                                        }
-                                        None => {
-                                            results.push(TestResultItem {
-                                                name: case.name.clone(),
-                                                status: TestStatus::Failed,
-                                                detail: "expected-value evaluation was not produced".to_string(),
-                                            });
-                                        }
+                        Some(raw_expected) => match parse_expected_value(raw_expected) {
+                            Ok(expected) => match expected_value_results.get(&case.name) {
+                                Some(Ok(actual)) => {
+                                    if values_equal(&expected, actual) {
+                                        results.push(TestResultItem {
+                                            name: case.name.clone(),
+                                            status: TestStatus::Passed,
+                                            detail: format!("expected {}", expected),
+                                        });
+                                    } else {
+                                        results.push(TestResultItem {
+                                            name: case.name.clone(),
+                                            status: TestStatus::Failed,
+                                            detail: format!(
+                                                "expected {}, got {}",
+                                                expected, actual
+                                            ),
+                                        });
                                     }
                                 }
-                                Err(e) => {
+                                Some(Err(e)) => {
                                     results.push(TestResultItem {
                                         name: case.name.clone(),
                                         status: TestStatus::Failed,
-                                        detail: e,
+                                        detail: format!("expected-value evaluation failed: {}", e),
                                     });
                                 }
+                                None => {
+                                    results.push(TestResultItem {
+                                        name: case.name.clone(),
+                                        status: TestStatus::Failed,
+                                        detail: "expected-value evaluation was not produced"
+                                            .to_string(),
+                                    });
+                                }
+                            },
+                            Err(e) => {
+                                results.push(TestResultItem {
+                                    name: case.name.clone(),
+                                    status: TestStatus::Failed,
+                                    detail: e,
+                                });
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -774,9 +829,18 @@ fn run_test(label: &str, source: &str) -> (usize, usize, usize, bool, bool) {
         }
     }
 
-    let pass_count = results.iter().filter(|r| matches!(r.status, TestStatus::Passed)).count();
-    let fail_count = results.iter().filter(|r| matches!(r.status, TestStatus::Failed)).count();
-    let skip_count = results.iter().filter(|r| matches!(r.status, TestStatus::Skipped)).count();
+    let pass_count = results
+        .iter()
+        .filter(|r| matches!(r.status, TestStatus::Passed))
+        .count();
+    let fail_count = results
+        .iter()
+        .filter(|r| matches!(r.status, TestStatus::Failed))
+        .count();
+    let skip_count = results
+        .iter()
+        .filter(|r| matches!(r.status, TestStatus::Skipped))
+        .count();
 
     if fail_count == 0 {
         println!("  {C_GREEN}PASS{C_RESET} {label}");
@@ -790,14 +854,23 @@ fn run_test(label: &str, source: &str) -> (usize, usize, usize, bool, bool) {
                 if r.detail.is_empty() {
                     println!("    {C_GREEN}✓{C_RESET} {}", r.name);
                 } else {
-                    println!("    {C_GREEN}✓{C_RESET} {}  {C_DIM}({}){C_RESET}", r.name, r.detail);
+                    println!(
+                        "    {C_GREEN}✓{C_RESET} {}  {C_DIM}({}){C_RESET}",
+                        r.name, r.detail
+                    );
                 }
             }
             TestStatus::Failed => {
-                println!("    {C_RED}✕{C_RESET} {}  {C_DIM}({}){C_RESET}", r.name, r.detail);
+                println!(
+                    "    {C_RED}✕{C_RESET} {}  {C_DIM}({}){C_RESET}",
+                    r.name, r.detail
+                );
             }
             TestStatus::Skipped => {
-                println!("    {C_YELLOW}○{C_RESET} {}  {C_DIM}({}){C_RESET}", r.name, r.detail);
+                println!(
+                    "    {C_YELLOW}○{C_RESET} {}  {C_DIM}({}){C_RESET}",
+                    r.name, r.detail
+                );
             }
         }
     }
@@ -809,13 +882,25 @@ fn run_test(label: &str, source: &str) -> (usize, usize, usize, bool, bool) {
             }
         }
         for e in errors.iter().filter(|e| e.severity == Severity::Error) {
-            println!("    {C_RED}analyzer error:{C_RESET} [{C_CYAN}{}{C_RESET}] {}", e.code, e.message);
+            println!(
+                "    {C_RED}analyzer error:{C_RESET} [{C_CYAN}{}{C_RESET}] {}",
+                e.code, e.message
+            );
         }
     }
 
-    println!("    results: {} passed, {} failed, {} skipped\n", pass_count, fail_count, skip_count);
+    println!(
+        "    results: {} passed, {} failed, {} skipped\n",
+        pass_count, fail_count, skip_count
+    );
     let suite_skipped = pass_count == 0 && fail_count == 0 && skip_count > 0;
-    (pass_count, fail_count, skip_count, fail_count > 0, suite_skipped)
+    (
+        pass_count,
+        fail_count,
+        skip_count,
+        fail_count > 0,
+        suite_skipped,
+    )
 }
 
 fn parse_import_path(line: &str) -> Option<String> {
@@ -824,16 +909,14 @@ fn parse_import_path(line: &str) -> Option<String> {
         return None;
     }
     let rest = t["import".len()..].trim_start();
-    if !rest.starts_with('"') {
+    let raw_path = rest.strip_suffix(';')?.trim();
+    if raw_path.is_empty() {
         return None;
     }
-    let end_quote = rest[1..].find('"')? + 1;
-    let path = &rest[1..end_quote];
-    let tail = rest[end_quote + 1..].trim();
-    if tail != ";" {
-        return None;
+    if raw_path.starts_with('"') && raw_path.ends_with('"') && raw_path.len() >= 2 {
+        return Some(raw_path[1..raw_path.len() - 1].to_string());
     }
-    Some(path.to_string())
+    Some(raw_path.to_string())
 }
 
 fn load_source_with_imports(entry: &str) -> Result<String, String> {
@@ -842,7 +925,8 @@ fn load_source_with_imports(entry: &str) -> Result<String, String> {
         seen: &mut std::collections::HashSet<PathBuf>,
         out: &mut String,
     ) -> Result<(), String> {
-        let canonical = fs::canonicalize(path).map_err(|e| format!("{} ({})", path.display(), e))?;
+        let canonical =
+            fs::canonicalize(path).map_err(|e| format!("{} ({})", path.display(), e))?;
         if seen.contains(&canonical) {
             return Ok(());
         }
@@ -875,7 +959,13 @@ fn load_source_with_imports(entry: &str) -> Result<String, String> {
     Ok(merged)
 }
 
-fn compile_source(source: &str, label: &str, opt_level: OptimizationLevel, debug_mode: bool, analyzer_config: &AnalyzerConfig) {
+fn compile_source(
+    source: &str,
+    label: &str,
+    opt_level: OptimizationLevel,
+    debug_mode: bool,
+    analyzer_config: &AnalyzerConfig,
+) {
     let start = std::time::Instant::now();
 
     let mut lex = Lexer::new(source);

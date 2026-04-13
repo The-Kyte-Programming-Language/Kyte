@@ -1,101 +1,101 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     // 앵커
-    At,           // @
-    Hash,         // #
+    At,   // @
+    Hash, // #
 
     // 키워드
-    Main,         // main
-    Function,     // function
-    Vault,        // Vault
-    Kill,         // Kill
-    Exit,         // Exit
-    Yield,        // yield
-    Return,       // return
-    If,           // if
-    Else,         // else
-    Loop,         // loop
-    For,          // for
-    In,           // in
-    Break,        // break
-    True,         // true
-    False,        // false
-    Free,         // free
-    Print,        // print
-    While,        // while
-    As,           // as
-    Struct,       // struct
-    Auto,         // auto (A07: 타입 추론)
-    Assert,       // assert (A10)
-    Enum,         // enum
-    Match,        // match
-    FatArrow,     // =>
-    Trait,        // trait
-    Impl,         // impl
-    Mod,          // mod
-    Const,        // const
-    Fn,           // fn (closure)
-    Pipe,         // |
-    Import,       // import
+    Main,     // main
+    Function, // function
+    Vault,    // Vault
+    Kill,     // Kill
+    Exit,     // Exit
+    Yield,    // yield
+    Return,   // return
+    If,       // if
+    Else,     // else
+    Loop,     // loop
+    For,      // for
+    In,       // in
+    Break,    // break
+    True,     // true
+    False,    // false
+    Free,     // free
+    Print,    // print
+    While,    // while
+    As,       // as
+    Struct,   // struct
+    Auto,     // auto (A07: 타입 추론)
+    Assert,   // assert (A10)
+    Enum,     // enum
+    Match,    // match
+    FatArrow, // =>
+    Trait,    // trait
+    Impl,     // impl
+    Mod,      // mod
+    Const,    // const
+    Fn,       // fn (closure)
+    Pipe,     // |
+    Import,   // import
 
     // 타입
-    Int,          // int
-    Float,        // float
-    String,       // string
-    Bool,         // bool
-    TyI8,         // i8
-    TyI16,        // i16
-    TyI32,        // i32
-    TyI64,        // i64
-    TyU8,         // u8
-    TyU16,        // u16
-    TyU32,        // u32
-    TyU64,        // u64
+    Int,    // int
+    Float,  // float
+    String, // string
+    Bool,   // bool
+    TyI8,   // i8
+    TyI16,  // i16
+    TyI32,  // i32
+    TyI64,  // i64
+    TyU8,   // u8
+    TyU16,  // u16
+    TyU32,  // u32
+    TyU64,  // u64
 
     // 리터럴
     IntLit(i64),
     FloatLit(f64),
     StringLit(String),
-    FStringLit(String),  // f"hello {name}" — raw content for parser to expand
+    FStringLit(String), // f"hello {name}" — raw content for parser to expand
 
     // 식별자
     Ident(String),
 
     // 심볼
-    LParen,       // (
-    RParen,       // )
-    LBrace,       // {
-    RBrace,       // }
-    LBracket,     // [
-    RBracket,     // ]
-    Semicolon,    // ;
-    Comma,        // ,
-    Colon,        // :
-    Dot,          // .
-    Eq,           // =
-    EqEq,         // ==
-    Neq,          // !=
-    Le,           // <=
-    Ge,           // >=
-    Arrow,        // ->
-    DotDot,       // ..
-    Plus,         // +
-    Minus,        // -
-    Star,         // *
-    Slash,        // /
-    Percent,      // %
-    PlusEq,       // +=
-    MinusEq,      // -=
-    StarEq,       // *=
-    SlashEq,      // /=
-    PercentEq,    // %=
-    Not,          // !
-    And,          // &&
-    Or,           // ||
-    Lt,           // <
-    Gt,           // >
-    
-    // 기타 
+    LParen,    // (
+    RParen,    // )
+    LBrace,    // {
+    RBrace,    // }
+    LBracket,  // [
+    RBracket,  // ]
+    Semicolon, // ;
+    Comma,     // ,
+    Colon,     // :
+    Dot,       // .
+    Eq,        // =
+    EqEq,      // ==
+    Neq,       // !=
+    Le,        // <=
+    Ge,        // >=
+    Arrow,     // ->
+    DotDot,    // ..
+    Plus,      // +
+    Minus,     // -
+    Star,      // *
+    Slash,     // /
+    Percent,   // %
+    PlusEq,    // +=
+    MinusEq,   // -=
+    StarEq,    // *=
+    SlashEq,   // /=
+    PercentEq, // %=
+    Not,       // !
+    And,       // &&
+    Or,        // ||
+    Lt,        // <
+    Gt,        // >
+
+    // 기타
     EOF,
 }
 
@@ -103,9 +103,9 @@ pub enum Token {
 #[derive(Debug, PartialEq, Clone)]
 pub enum AnchorKind {
     Main,
-    Plain,           // @handler() — no explicit kind
-    Thread,          // @worker(thread)
-    Event(String),   // @handler(event(error))
+    Plain,         // @handler() — no explicit kind
+    Thread,        // @worker(thread)
+    Event(String), // @handler(event(error))
 }
 
 // 위치 정보
@@ -130,12 +130,12 @@ pub enum Ty {
     U16,
     U32,
     U64,
-    Array(Box<Ty>),  // int[], u8[], etc.
+    Array(Box<Ty>), // int[], u8[], etc.
     Struct(String),
-    Auto,           // auto (A07: 타입 추론, analyzer가 해결)
-    Enum(String),        // enum 타입
-    TypeParam(String),   // 제네릭 타입 파라미터 (T, U 등)
-    Fn(Vec<Ty>, Option<Box<Ty>>),  // fn(int, int) -> bool  (클로저/함수 타입)
+    Auto,                         // auto (A07: 타입 추론, analyzer가 해결)
+    Enum(String),                 // enum 타입
+    TypeParam(String),            // 제네릭 타입 파라미터 (T, U 등)
+    Fn(Vec<Ty>, Option<Box<Ty>>), // fn(int, int) -> bool  (클로저/함수 타입)
 }
 
 // 표현식
@@ -147,12 +147,12 @@ pub enum Expr {
     Bool(bool),
     Ident(String),
     UnaryOp {
-        op:   UnaryOpKind,
+        op: UnaryOpKind,
         expr: Box<Expr>,
     },
     BinOp {
-        left:  Box<Expr>,
-        op:    BinOpKind,
+        left: Box<Expr>,
+        op: BinOpKind,
         right: Box<Expr>,
     },
     Call {
@@ -169,7 +169,7 @@ pub enum Expr {
     // expr as ty
     Cast {
         expr: Box<Expr>,
-        ty:   Ty,
+        ty: Ty,
     },
     StructInit {
         name: String,
@@ -192,7 +192,7 @@ pub enum Expr {
     },
     // 클로저: |x, y| { body } 또는 |x, y| expr
     Closure {
-        params: Vec<(String, Option<Ty>)>,  // (name, opt_type)
+        params: Vec<(String, Option<Ty>)>, // (name, opt_type)
         body: Vec<(Stmt, Span)>,
     },
     // 문자열 보간: f"hello {name}, age={age}"
@@ -213,9 +213,19 @@ pub enum FStringPart {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum BinOpKind {
-    Add, Sub, Mul, Div, Mod,
-    Lt, Gt, Eq, Neq, Le, Ge,
-    And, Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Lt,
+    Gt,
+    Eq,
+    Neq,
+    Le,
+    Ge,
+    And,
+    Or,
 }
 
 // 구문(Statement)
@@ -223,30 +233,30 @@ pub enum BinOpKind {
 pub enum Stmt {
     // int x = 10;
     VarDecl {
-        ty:    Ty,
-        name:  String,
+        ty: Ty,
+        name: String,
         value: Expr,
     },
     // const int X = 10;
     ConstDecl {
-        ty:    Ty,
-        name:  String,
+        ty: Ty,
+        name: String,
         value: Expr,
     },
     // Vault int x = 10;
     VaultDecl {
-        ty:    Ty,
-        name:  String,
+        ty: Ty,
+        name: String,
         value: Expr,
     },
     // x = 10;
     Assign {
-        name:  String,
+        name: String,
         value: Expr,
     },
     // arr[i] = 10;
     IndexAssign {
-        name:  String,
+        name: String,
         index: Expr,
         value: Expr,
     },
@@ -258,8 +268,8 @@ pub enum Stmt {
     },
     // x += 10;  x -= 5;  etc.
     CompoundAssign {
-        name:  String,
-        op:    BinOpKind,
+        name: String,
+        op: BinOpKind,
         value: Expr,
     },
     // Kill "메시지"; 또는 Kill expr;
@@ -272,7 +282,7 @@ pub enum Stmt {
     Return(Option<Expr>),
     // if expr { ... } else { ... }
     If {
-        cond:      Expr,
+        cond: Expr,
         then_body: Vec<(Stmt, Span)>,
         else_body: Option<Vec<(Stmt, Span)>>,
     },
@@ -285,9 +295,9 @@ pub enum Stmt {
     },
     // for i in 0..10 { ... }
     For {
-        var:  String,
+        var: String,
         from: Expr,
-        to:   Expr,
+        to: Expr,
         body: Vec<(Stmt, Span)>,
     },
     // break;
@@ -308,9 +318,9 @@ pub enum Stmt {
     },
     // 블록 내부 인라인 앵커
     InlineAnchor {
-        name:  String,
-        kind:  AnchorKind,
-        body:  Vec<(Stmt, Span)>,
+        name: String,
+        kind: AnchorKind,
+        body: Vec<(Stmt, Span)>,
     },
     // 표현식 구문 (함수 호출 등)
     ExprStmt(Expr),
@@ -319,7 +329,7 @@ pub enum Stmt {
 // 함수 파라미터
 #[derive(Debug, PartialEq, Clone)]
 pub struct Param {
-    pub ty:   Ty,
+    pub ty: Ty,
     pub name: String,
 }
 
@@ -367,19 +377,19 @@ pub enum Pattern {
 pub enum TopLevel {
     // 앵커
     Anchor {
-        name:      String,
-        kind:      AnchorKind,
-        body:      Vec<(Stmt, Span)>,
-        children:  Vec<(TopLevel, Span)>,
+        name: String,
+        kind: AnchorKind,
+        body: Vec<(Stmt, Span)>,
+        children: Vec<(TopLevel, Span)>,
     },
     // function add(int a, int b) -> int { ... }
     Function {
-        name:       String,
-        type_params: Vec<String>,  // 제네릭: <T, U>
-        params:     Vec<Param>,
-        return_ty:  Option<Ty>,
-        body:       Vec<(Stmt, Span)>,
-        decorators: Vec<String>,  // A10: #[test] 등
+        name: String,
+        type_params: Vec<String>, // 제네릭: <T, U>
+        params: Vec<Param>,
+        return_ty: Option<Ty>,
+        body: Vec<(Stmt, Span)>,
+        decorators: Vec<String>, // A10: #[test] 등
     },
     Struct {
         name: String,

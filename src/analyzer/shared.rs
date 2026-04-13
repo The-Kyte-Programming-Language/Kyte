@@ -31,7 +31,10 @@ fn levenshtein(a: &str, b: &str) -> usize {
     dp[b_chars.len()]
 }
 
-pub fn nearest_name<'a>(target: &str, candidates: impl Iterator<Item = &'a String>) -> Option<String> {
+pub fn nearest_name<'a>(
+    target: &str,
+    candidates: impl Iterator<Item = &'a String>,
+) -> Option<String> {
     let mut best: Option<(usize, String)> = None;
     for c in candidates {
         let d = levenshtein(target, c);
@@ -70,8 +73,7 @@ impl fmt::Display for CompileError {
         writeln!(
             f,
             "     {DIM}\u{2500}\u{2192} line {}:{}{RESET}",
-            self.span.line,
-            self.span.col
+            self.span.line, self.span.col
         )?;
         let trimmed = self.source_line.trim_end();
         if !trimmed.is_empty() {
@@ -80,8 +82,7 @@ impl fmt::Display for CompileError {
             writeln!(
                 f,
                 "  {DIM}{:>3}{RESET} {DIM}\u{2502}{RESET} {}",
-                self.span.line,
-                trimmed
+                self.span.line, trimmed
             )?;
             writeln!(
                 f,
@@ -90,7 +91,11 @@ impl fmt::Display for CompileError {
                 "\u{2500}".repeat(trimmed.trim_start().len())
             )?;
         }
-        writeln!(f, "      {CYAN}\u{21B3} hint:{RESET} {DIM}{}{RESET}", self.hint)
+        writeln!(
+            f,
+            "      {CYAN}\u{21B3} hint:{RESET} {DIM}{}{RESET}",
+            self.hint
+        )
     }
 }
 

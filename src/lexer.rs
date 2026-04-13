@@ -27,9 +27,14 @@ impl Lexer {
         let ch = self.current();
         self.pos += 1;
         match ch {
-            Some('\n') => { self.line += 1; self.col = 0; }
-            Some(_)    => { self.col += 1; }
-            None       => {}
+            Some('\n') => {
+                self.line += 1;
+                self.col = 0;
+            }
+            Some(_) => {
+                self.col += 1;
+            }
+            None => {}
         }
         ch
     }
@@ -38,12 +43,18 @@ impl Lexer {
         loop {
             // 공백 제거
             while let Some(ch) = self.current() {
-                if ch.is_whitespace() { self.advance(); } else { break; }
+                if ch.is_whitespace() {
+                    self.advance();
+                } else {
+                    break;
+                }
             }
             // // 주석 처리
             if self.current() == Some('/') && self.input.get(self.pos + 1) == Some(&'/') {
                 while let Some(ch) = self.current() {
-                    if ch == '\n' { break; }
+                    if ch == '\n' {
+                        break;
+                    }
                     self.advance();
                 }
             } else {
@@ -56,17 +67,38 @@ impl Lexer {
         self.advance(); // 여는 " 건너뜀
         let mut s = String::new();
         while let Some(ch) = self.current() {
-            if ch == '"' { self.advance(); break; }
+            if ch == '"' {
+                self.advance();
+                break;
+            }
             if ch == '\\' {
                 self.advance();
                 match self.current() {
-                    Some('n')  => { s.push('\n'); self.advance(); }
-                    Some('t')  => { s.push('\t'); self.advance(); }
-                    Some('r')  => { s.push('\r'); self.advance(); }
-                    Some('\\') => { s.push('\\'); self.advance(); }
-                    Some('"')  => { s.push('"');  self.advance(); }
-                    Some('0')  => { s.push('\0'); self.advance(); }
-                    Some('x')  => {
+                    Some('n') => {
+                        s.push('\n');
+                        self.advance();
+                    }
+                    Some('t') => {
+                        s.push('\t');
+                        self.advance();
+                    }
+                    Some('r') => {
+                        s.push('\r');
+                        self.advance();
+                    }
+                    Some('\\') => {
+                        s.push('\\');
+                        self.advance();
+                    }
+                    Some('"') => {
+                        s.push('"');
+                        self.advance();
+                    }
+                    Some('0') => {
+                        s.push('\0');
+                        self.advance();
+                    }
+                    Some('x') => {
                         self.advance();
                         let mut hex = String::new();
                         for _ in 0..2 {
@@ -74,7 +106,9 @@ impl Lexer {
                                 if c.is_ascii_hexdigit() {
                                     hex.push(c);
                                     self.advance();
-                                } else { break; }
+                                } else {
+                                    break;
+                                }
                             }
                         }
                         if let Ok(val) = u8::from_str_radix(&hex, 16) {
@@ -87,10 +121,12 @@ impl Lexer {
                             s.push('?');
                         }
                     }
-                    Some('u')  => {
+                    Some('u') => {
                         self.advance();
                         let has_brace = self.current() == Some('{');
-                        if has_brace { self.advance(); }
+                        if has_brace {
+                            self.advance();
+                        }
                         let mut hex = String::new();
                         let limit = if has_brace { 6 } else { 4 };
                         for _ in 0..limit {
@@ -98,11 +134,13 @@ impl Lexer {
                                 if c.is_ascii_hexdigit() {
                                     hex.push(c);
                                     self.advance();
-                                } else { break; }
+                                } else {
+                                    break;
+                                }
                             }
                         }
-                        if has_brace {
-                            if self.current() == Some('}') { self.advance(); }
+                        if has_brace && self.current() == Some('}') {
+                            self.advance();
                         }
                         if let Ok(val) = u32::from_str_radix(&hex, 16) {
                             if let Some(c) = char::from_u32(val) {
@@ -122,8 +160,14 @@ impl Lexer {
                             s.push('\u{FFFD}');
                         }
                     }
-                    Some(c)    => { s.push('\\'); s.push(c); self.advance(); }
-                    None       => { s.push('\\'); }
+                    Some(c) => {
+                        s.push('\\');
+                        s.push(c);
+                        self.advance();
+                    }
+                    None => {
+                        s.push('\\');
+                    }
                 }
             } else {
                 s.push(ch);
@@ -138,16 +182,36 @@ impl Lexer {
         self.advance(); // opening "
         let mut s = String::new();
         while let Some(ch) = self.current() {
-            if ch == '"' { self.advance(); break; }
+            if ch == '"' {
+                self.advance();
+                break;
+            }
             if ch == '\\' {
                 self.advance();
                 match self.current() {
-                    Some('n')  => { s.push('\n'); self.advance(); }
-                    Some('t')  => { s.push('\t'); self.advance(); }
-                    Some('\\') => { s.push('\\'); self.advance(); }
-                    Some('"')  => { s.push('"');  self.advance(); }
-                    Some('{')  => { s.push('{');  self.advance(); }
-                    _          => { s.push('\\'); }
+                    Some('n') => {
+                        s.push('\n');
+                        self.advance();
+                    }
+                    Some('t') => {
+                        s.push('\t');
+                        self.advance();
+                    }
+                    Some('\\') => {
+                        s.push('\\');
+                        self.advance();
+                    }
+                    Some('"') => {
+                        s.push('"');
+                        self.advance();
+                    }
+                    Some('{') => {
+                        s.push('{');
+                        self.advance();
+                    }
+                    _ => {
+                        s.push('\\');
+                    }
                 }
             } else {
                 s.push(ch);
@@ -213,48 +277,48 @@ impl Lexer {
         }
         // 키워드 판별
         match s.as_str() {
-            "main"     => Token::Main,
-            "fn"       => Token::Function,
-            "Vault"    => Token::Vault,
-            "Kill"     => Token::Kill,
-            "Exit"     => Token::Exit,
-            "yield"    => Token::Yield,
-            "return"   => Token::Return,
-            "if"       => Token::If,
-            "else"     => Token::Else,
-            "loop"     => Token::Loop,
-            "while"    => Token::While,
-            "for"      => Token::For,
-            "in"       => Token::In,
-            "break"    => Token::Break,
-            "true"     => Token::True,
-            "false"    => Token::False,
-            "free"     => Token::Free,
-            "print"    => Token::Print,
-            "as"       => Token::As,
-            "struct"   => Token::Struct,
-            "auto"     => Token::Auto,
-            "assert"   => Token::Assert,
-            "enum"     => Token::Enum,
-            "match"    => Token::Match,
-            "trait"    => Token::Trait,
-            "impl"     => Token::Impl,
-            "mod"      => Token::Mod,
-            "const"    => Token::Const,
-            "import"   => Token::Import,
-            "int"      => Token::Int,
-            "float"    => Token::Float,
-            "string"   => Token::String,
-            "bool"     => Token::Bool,
-            "i8"       => Token::TyI8,
-            "i16"      => Token::TyI16,
-            "i32"      => Token::TyI32,
-            "i64"      => Token::TyI64,
-            "u8"       => Token::TyU8,
-            "u16"      => Token::TyU16,
-            "u32"      => Token::TyU32,
-            "u64"      => Token::TyU64,
-            _          => Token::Ident(s),
+            "main" => Token::Main,
+            "fn" => Token::Function,
+            "Vault" => Token::Vault,
+            "Kill" => Token::Kill,
+            "Exit" => Token::Exit,
+            "yield" => Token::Yield,
+            "return" => Token::Return,
+            "if" => Token::If,
+            "else" => Token::Else,
+            "loop" => Token::Loop,
+            "while" => Token::While,
+            "for" => Token::For,
+            "in" => Token::In,
+            "break" => Token::Break,
+            "true" => Token::True,
+            "false" => Token::False,
+            "free" => Token::Free,
+            "print" => Token::Print,
+            "as" => Token::As,
+            "struct" => Token::Struct,
+            "auto" => Token::Auto,
+            "assert" => Token::Assert,
+            "enum" => Token::Enum,
+            "match" => Token::Match,
+            "trait" => Token::Trait,
+            "impl" => Token::Impl,
+            "mod" => Token::Mod,
+            "const" => Token::Const,
+            "import" => Token::Import,
+            "int" => Token::Int,
+            "float" => Token::Float,
+            "string" => Token::String,
+            "bool" => Token::Bool,
+            "i8" => Token::TyI8,
+            "i16" => Token::TyI16,
+            "i32" => Token::TyI32,
+            "i64" => Token::TyI64,
+            "u8" => Token::TyU8,
+            "u16" => Token::TyU16,
+            "u32" => Token::TyU32,
+            "u64" => Token::TyU64,
+            _ => Token::Ident(s),
         }
     }
 
@@ -266,20 +330,56 @@ impl Lexer {
             let start_col = self.col;
 
             match self.current() {
-                None => { tokens.push((Token::EOF, start_line, start_col)); break; }
+                None => {
+                    tokens.push((Token::EOF, start_line, start_col));
+                    break;
+                }
                 Some(ch) => {
                     let tok = match ch {
-                        '@' => { self.advance(); Token::At }
-                        '#' => { self.advance(); Token::Hash }
-                        '(' => { self.advance(); Token::LParen }
-                        ')' => { self.advance(); Token::RParen }
-                        '{' => { self.advance(); Token::LBrace }
-                        '}' => { self.advance(); Token::RBrace }
-                        '[' => { self.advance(); Token::LBracket }
-                        ']' => { self.advance(); Token::RBracket }
-                        ';' => { self.advance(); Token::Semicolon }
-                        ',' => { self.advance(); Token::Comma }
-                        ':' => { self.advance(); Token::Colon }
+                        '@' => {
+                            self.advance();
+                            Token::At
+                        }
+                        '#' => {
+                            self.advance();
+                            Token::Hash
+                        }
+                        '(' => {
+                            self.advance();
+                            Token::LParen
+                        }
+                        ')' => {
+                            self.advance();
+                            Token::RParen
+                        }
+                        '{' => {
+                            self.advance();
+                            Token::LBrace
+                        }
+                        '}' => {
+                            self.advance();
+                            Token::RBrace
+                        }
+                        '[' => {
+                            self.advance();
+                            Token::LBracket
+                        }
+                        ']' => {
+                            self.advance();
+                            Token::RBracket
+                        }
+                        ';' => {
+                            self.advance();
+                            Token::Semicolon
+                        }
+                        ',' => {
+                            self.advance();
+                            Token::Comma
+                        }
+                        ':' => {
+                            self.advance();
+                            Token::Colon
+                        }
                         '+' => {
                             self.advance();
                             if self.current() == Some('=') {

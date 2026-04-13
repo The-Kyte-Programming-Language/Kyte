@@ -41,19 +41,29 @@ impl<'ctx> Codegen<'ctx> {
                 BinOpKind::Div => {
                     let is_zero = self
                         .builder
-                        .build_int_compare(IntPredicate::EQ, ri, ri.get_type().const_zero(), "div_zero")
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            ri,
+                            ri.get_type().const_zero(),
+                            "div_zero",
+                        )
                         .unwrap();
                     let func = self.current_fn.unwrap();
                     let ok_bb = self.context.append_basic_block(func, "div_ok");
                     let err_bb = self.context.append_basic_block(func, "div_err");
-                    self.builder.build_conditional_branch(is_zero, err_bb, ok_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(is_zero, err_bb, ok_bb)
+                        .unwrap();
 
                     self.builder.position_at_end(err_bb);
                     let printf = self.module.get_function("printf").unwrap();
-                    let fmt = self.global_string_ptr("runtime error: division by zero\\n", "div_zero_msg");
+                    let fmt = self
+                        .global_string_ptr("runtime error: division by zero\\n", "div_zero_msg");
                     self.builder.build_call(printf, &[fmt.into()], "").unwrap();
                     if let Some(recovery_bb) = self.recovery_stack.last().copied() {
-                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
+                        self.builder
+                            .build_unconditional_branch(recovery_bb)
+                            .unwrap();
                     } else {
                         let exit_fn = self.module.get_function("exit").unwrap();
                         self.builder
@@ -68,27 +78,43 @@ impl<'ctx> Codegen<'ctx> {
 
                     self.builder.position_at_end(ok_bb);
                     if signed {
-                        self.builder.build_int_signed_div(li, ri, "sdiv").unwrap().into()
+                        self.builder
+                            .build_int_signed_div(li, ri, "sdiv")
+                            .unwrap()
+                            .into()
                     } else {
-                        self.builder.build_int_unsigned_div(li, ri, "udiv").unwrap().into()
+                        self.builder
+                            .build_int_unsigned_div(li, ri, "udiv")
+                            .unwrap()
+                            .into()
                     }
                 }
                 BinOpKind::Mod => {
                     let is_zero = self
                         .builder
-                        .build_int_compare(IntPredicate::EQ, ri, ri.get_type().const_zero(), "mod_zero")
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            ri,
+                            ri.get_type().const_zero(),
+                            "mod_zero",
+                        )
                         .unwrap();
                     let func = self.current_fn.unwrap();
                     let ok_bb = self.context.append_basic_block(func, "mod_ok");
                     let err_bb = self.context.append_basic_block(func, "mod_err");
-                    self.builder.build_conditional_branch(is_zero, err_bb, ok_bb).unwrap();
+                    self.builder
+                        .build_conditional_branch(is_zero, err_bb, ok_bb)
+                        .unwrap();
 
                     self.builder.position_at_end(err_bb);
                     let printf = self.module.get_function("printf").unwrap();
-                    let fmt = self.global_string_ptr("runtime error: modulo by zero\\n", "mod_zero_msg");
+                    let fmt =
+                        self.global_string_ptr("runtime error: modulo by zero\\n", "mod_zero_msg");
                     self.builder.build_call(printf, &[fmt.into()], "").unwrap();
                     if let Some(recovery_bb) = self.recovery_stack.last().copied() {
-                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
+                        self.builder
+                            .build_unconditional_branch(recovery_bb)
+                            .unwrap();
                     } else {
                         let exit_fn = self.module.get_function("exit").unwrap();
                         self.builder
@@ -103,26 +129,60 @@ impl<'ctx> Codegen<'ctx> {
 
                     self.builder.position_at_end(ok_bb);
                     if signed {
-                        self.builder.build_int_signed_rem(li, ri, "srem").unwrap().into()
+                        self.builder
+                            .build_int_signed_rem(li, ri, "srem")
+                            .unwrap()
+                            .into()
                     } else {
-                        self.builder.build_int_unsigned_rem(li, ri, "urem").unwrap().into()
+                        self.builder
+                            .build_int_unsigned_rem(li, ri, "urem")
+                            .unwrap()
+                            .into()
                     }
                 }
                 BinOpKind::Lt => {
-                    let pred = if signed { IntPredicate::SLT } else { IntPredicate::ULT };
-                    self.builder.build_int_compare(pred, li, ri, "lt").unwrap().into()
+                    let pred = if signed {
+                        IntPredicate::SLT
+                    } else {
+                        IntPredicate::ULT
+                    };
+                    self.builder
+                        .build_int_compare(pred, li, ri, "lt")
+                        .unwrap()
+                        .into()
                 }
                 BinOpKind::Gt => {
-                    let pred = if signed { IntPredicate::SGT } else { IntPredicate::UGT };
-                    self.builder.build_int_compare(pred, li, ri, "gt").unwrap().into()
+                    let pred = if signed {
+                        IntPredicate::SGT
+                    } else {
+                        IntPredicate::UGT
+                    };
+                    self.builder
+                        .build_int_compare(pred, li, ri, "gt")
+                        .unwrap()
+                        .into()
                 }
                 BinOpKind::Le => {
-                    let pred = if signed { IntPredicate::SLE } else { IntPredicate::ULE };
-                    self.builder.build_int_compare(pred, li, ri, "le").unwrap().into()
+                    let pred = if signed {
+                        IntPredicate::SLE
+                    } else {
+                        IntPredicate::ULE
+                    };
+                    self.builder
+                        .build_int_compare(pred, li, ri, "le")
+                        .unwrap()
+                        .into()
                 }
                 BinOpKind::Ge => {
-                    let pred = if signed { IntPredicate::SGE } else { IntPredicate::UGE };
-                    self.builder.build_int_compare(pred, li, ri, "ge").unwrap().into()
+                    let pred = if signed {
+                        IntPredicate::SGE
+                    } else {
+                        IntPredicate::UGE
+                    };
+                    self.builder
+                        .build_int_compare(pred, li, ri, "ge")
+                        .unwrap()
+                        .into()
                 }
                 BinOpKind::Eq => self
                     .builder
@@ -143,11 +203,21 @@ impl<'ctx> Codegen<'ctx> {
                     let lf = l.into_float_value();
                     let rf = r.into_float_value();
                     match op {
-                        BinOpKind::Add => self.builder.build_float_add(lf, rf, "fadd").unwrap().into(),
-                        BinOpKind::Sub => self.builder.build_float_sub(lf, rf, "fsub").unwrap().into(),
-                        BinOpKind::Mul => self.builder.build_float_mul(lf, rf, "fmul").unwrap().into(),
-                        BinOpKind::Div => self.builder.build_float_div(lf, rf, "fdiv").unwrap().into(),
-                        BinOpKind::Mod => self.builder.build_float_rem(lf, rf, "fmod").unwrap().into(),
+                        BinOpKind::Add => {
+                            self.builder.build_float_add(lf, rf, "fadd").unwrap().into()
+                        }
+                        BinOpKind::Sub => {
+                            self.builder.build_float_sub(lf, rf, "fsub").unwrap().into()
+                        }
+                        BinOpKind::Mul => {
+                            self.builder.build_float_mul(lf, rf, "fmul").unwrap().into()
+                        }
+                        BinOpKind::Div => {
+                            self.builder.build_float_div(lf, rf, "fdiv").unwrap().into()
+                        }
+                        BinOpKind::Mod => {
+                            self.builder.build_float_rem(lf, rf, "fmod").unwrap().into()
+                        }
                         BinOpKind::Lt => self
                             .builder
                             .build_float_compare(FloatPredicate::OLT, lf, rf, "flt")
@@ -283,7 +353,10 @@ impl<'ctx> Codegen<'ctx> {
             .basic()
             .unwrap()
             .into_int_value();
-        let total = self.builder.build_int_add(len_l, len_r, "total_len").unwrap();
+        let total = self
+            .builder
+            .build_int_add(len_l, len_r, "total_len")
+            .unwrap();
         let total_plus1 = self
             .builder
             .build_int_add(total, self.i64_type().const_int(1, false), "buf_size")
@@ -308,7 +381,13 @@ impl<'ctx> Codegen<'ctx> {
         self.builder
             .build_call(
                 snprintf,
-                &[buf.into(), total_plus1.into(), fmt.into(), lp.into(), rp.into()],
+                &[
+                    buf.into(),
+                    total_plus1.into(),
+                    fmt.into(),
+                    lp.into(),
+                    rp.into(),
+                ],
                 "",
             )
             .unwrap();
@@ -316,7 +395,12 @@ impl<'ctx> Codegen<'ctx> {
         buf.into()
     }
 
-    pub(super) fn to_string_ptr(&mut self, val: BasicValueEnum<'ctx>, ty: &Ty) -> PointerValue<'ctx> {
+    #[allow(clippy::wrong_self_convention)]
+    pub(super) fn to_string_ptr(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        ty: &Ty,
+    ) -> PointerValue<'ctx> {
         if *ty == Ty::String {
             return val.into_pointer_value();
         }
@@ -326,7 +410,8 @@ impl<'ctx> Codegen<'ctx> {
         let null_ptr = self.ptr_type().const_null();
         let zero_size = self.i64_type().const_int(0, false);
 
-        let (fmt_ptr, fmt_args): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum<'ctx>>) = match ty {
+        let (fmt_ptr, fmt_args): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum<'ctx>>) = match ty
+        {
             Ty::Float => {
                 let fmt = self.global_string_ptr("%f", "fmt_f2s");
                 (fmt, vec![val.into()])
@@ -346,9 +431,13 @@ impl<'ctx> Codegen<'ctx> {
                 let is_unsigned = matches!(ty, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64);
                 let print_val = if iv.get_type().get_bit_width() < 64 {
                     if is_unsigned {
-                        self.builder.build_int_z_extend(iv, self.i64_type(), "ext").unwrap()
+                        self.builder
+                            .build_int_z_extend(iv, self.i64_type(), "ext")
+                            .unwrap()
                     } else {
-                        self.builder.build_int_s_extend(iv, self.i64_type(), "ext").unwrap()
+                        self.builder
+                            .build_int_s_extend(iv, self.i64_type(), "ext")
+                            .unwrap()
                     }
                 } else {
                     iv
@@ -443,7 +532,10 @@ impl<'ctx> Codegen<'ctx> {
             (Ty::Bool, d) if Self::is_integer_ty(d) => {
                 let iv = val.into_int_value();
                 let target_ty = self.ty_to_int_type(d);
-                self.builder.build_int_z_extend(iv, target_ty, "b2i").unwrap().into()
+                self.builder
+                    .build_int_z_extend(iv, target_ty, "b2i")
+                    .unwrap()
+                    .into()
             }
             (s, Ty::Bool) if Self::is_integer_ty(s) => {
                 let iv = val.into_int_value();

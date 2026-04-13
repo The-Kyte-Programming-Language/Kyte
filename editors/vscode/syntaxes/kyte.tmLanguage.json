@@ -4,12 +4,16 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
+    { "include": "#decorators" },
+    { "include": "#imports" },
     { "include": "#numbers" },
     { "include": "#anchors" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#functions" },
+    { "include": "#variables" },
     { "include": "#operators" },
+    { "include": "#punctuation" },
     { "include": "#constants" }
   ],
   "repository": {
@@ -31,6 +35,56 @@
             {
               "name": "constant.character.escape.kyte",
               "match": "\\\\[nrt\\\\\"0]"
+            }
+          ]
+        }
+      ]
+    },
+    "decorators": {
+      "patterns": [
+        {
+          "name": "meta.annotation.kyte",
+          "begin": "#\\s*([a-zA-Z_]\\w*)\\s*\\(",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.decorator.kyte" }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "name": "keyword.control.decorator.kyte",
+              "match": "\\b(success|fail|skip)\\b"
+            },
+            {
+              "name": "constant.other.error-code.kyte",
+              "match": "\\bfail_[A-Z][0-9]{3}\\b"
+            },
+            { "include": "#strings" },
+            { "include": "#numbers" }
+          ]
+        },
+        {
+          "name": "meta.annotation.kyte",
+          "match": "#\\s*[a-zA-Z_]\\w*"
+        }
+      ]
+    },
+    "imports": {
+      "patterns": [
+        {
+          "name": "meta.import.kyte",
+          "begin": "\\bimport\\b",
+          "beginCaptures": {
+            "0": { "name": "keyword.other.kyte" }
+          },
+          "end": ";",
+          "patterns": [
+            {
+              "name": "string.quoted.double.kyte",
+              "match": "\"[^\"]+\""
+            },
+            {
+              "name": "entity.name.namespace.kyte",
+              "match": "\\b[a-zA-Z_]\\w*(?:\\.[a-zA-Z_]\\w*)*\\b"
             }
           ]
         }
@@ -60,11 +114,15 @@
       "patterns": [
         {
           "name": "keyword.control.kyte",
-          "match": "\\b(if|else|for|in|loop|break|return|yield)\\b"
+          "match": "\\b(if|else|for|in|loop|while|break|return|yield|match)\\b"
         },
         {
           "name": "keyword.other.kyte",
-          "match": "\\b(fn|function|vault|free|kill|exit)\\b"
+          "match": "\\b(fn|function|struct|enum|mod|import|Vault|Kill|Exit)\\b"
+        },
+        {
+          "name": "invalid.deprecated.kyte",
+          "match": "\\bfree\\b"
         }
       ]
     },
@@ -73,6 +131,10 @@
         {
           "name": "storage.type.kyte",
           "match": "\\b(int|float|string|bool)\\b"
+        },
+        {
+          "name": "entity.name.type.kyte",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
         }
       ]
     },
@@ -81,6 +143,22 @@
         {
           "name": "entity.name.function.kyte",
           "match": "\\b([a-zA-Z_]\\w*)\\s*(?=\\()"
+        },
+        {
+          "name": "entity.name.type.struct.kyte",
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*(?=\\{|\\.)"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.definition.kyte",
+          "match": "(?<=\\b(?:int|float|string|bool|[A-Z][a-zA-Z0-9_]*)\\s+)([a-zA-Z_]\\w*)\\b"
+        },
+        {
+          "name": "variable.other.kyte",
+          "match": "\\b[a-z][a-zA-Z0-9_]*\\b"
         }
       ]
     },
@@ -88,7 +166,15 @@
       "patterns": [
         {
           "name": "keyword.operator.kyte",
-          "match": "(->|\\.\\.|\\.\\.|&&|\\|\\||[+\\-*/%]=?|[<>!=]=?|!)"
+          "match": "(->|\\.\\.|&&|\\|\\||[+\\-*/%]=?|[<>!=]=?|!)"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.kyte",
+          "match": "[\\[\\]{}(),;.]"
         }
       ]
     },

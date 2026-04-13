@@ -10,11 +10,11 @@ const MAX_DEPTH: usize = 256;
 
 pub struct Parser {
     tokens: Vec<Token>,
-    lines:  Vec<usize>,
-    cols:   Vec<usize>,
-    pos:    usize,
+    lines: Vec<usize>,
+    cols: Vec<usize>,
+    pos: usize,
     pub errors: Vec<String>,
-    depth:  usize,
+    depth: usize,
     no_struct_init: bool,
     enum_names: std::collections::HashSet<String>,
 }
@@ -29,18 +29,62 @@ impl Parser {
             lines.push(line);
             cols.push(col);
         }
-        Parser { tokens, lines, cols, pos: 0, errors: Vec::new(), depth: 0, no_struct_init: false, enum_names: std::collections::HashSet::new() }
+        Parser {
+            tokens,
+            lines,
+            cols,
+            pos: 0,
+            errors: Vec::new(),
+            depth: 0,
+            no_struct_init: false,
+            enum_names: std::collections::HashSet::new(),
+        }
     }
 
     fn is_keyword(name: &str) -> bool {
         matches!(
             name,
-            "main" | "fn" | "Vault" | "Kill" | "Exit" | "yield" | "return"
-            | "if" | "else" | "loop" | "while" | "for" | "in" | "break"
-            | "true" | "false" | "free" | "print" | "as" | "struct"
-            | "int" | "float" | "string" | "bool" | "auto" | "assert"
-            | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
-            | "enum" | "match" | "trait" | "impl" | "mod" | "const" | "import"
+            "main"
+                | "fn"
+                | "Vault"
+                | "Kill"
+                | "Exit"
+                | "yield"
+                | "return"
+                | "if"
+                | "else"
+                | "loop"
+                | "while"
+                | "for"
+                | "in"
+                | "break"
+                | "true"
+                | "false"
+                | "free"
+                | "print"
+                | "as"
+                | "struct"
+                | "int"
+                | "float"
+                | "string"
+                | "bool"
+                | "auto"
+                | "assert"
+                | "i8"
+                | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "enum"
+                | "match"
+                | "trait"
+                | "impl"
+                | "mod"
+                | "const"
+                | "import"
         )
     }
 
@@ -50,7 +94,9 @@ impl Parser {
         if Self::is_keyword(&name) {
             self.errors.push(format!(
                 "Reserved keyword '{}' cannot be used as identifier at line {}:{}",
-                name, self.current_line(), self.current_col()
+                name,
+                self.current_line(),
+                self.current_col()
             ));
         }
         name
@@ -69,7 +115,10 @@ impl Parser {
     }
 
     fn current_span(&self) -> Span {
-        Span { line: self.current_line(), col: self.current_col() }
+        Span {
+            line: self.current_line(),
+            col: self.current_col(),
+        }
     }
 
     fn advance(&mut self) -> &Token {
@@ -127,7 +176,7 @@ impl Parser {
                             self.current_col()
                         ));
                         break;
-                    },
+                    }
                     Token::Comma => {
                         arg_text.push(',');
                         self.advance();
@@ -174,10 +223,8 @@ impl Parser {
             name = format!("{}({})", name, arg_text.trim());
         }
 
-        if has_bracket {
-            if self.current() == &Token::RBracket {
-                self.advance();
-            }
+        if has_bracket && self.current() == &Token::RBracket {
+            self.advance();
         }
 
         name
@@ -195,7 +242,10 @@ impl Parser {
                 self.current_col()
             ));
             // 에러 복구: 동기화 토큰까지 스킵 (세미콜론, 중괄호 등)
-            if !matches!(self.current(), Token::Semicolon | Token::RBrace | Token::RParen | Token::RBracket | Token::EOF) {
+            if !matches!(
+                self.current(),
+                Token::Semicolon | Token::RBrace | Token::RParen | Token::RBracket | Token::EOF
+            ) {
                 self.advance();
             }
         }
@@ -203,49 +253,175 @@ impl Parser {
 
     fn eat_ident(&mut self) -> String {
         match self.current().clone() {
-            Token::Ident(s) => { self.advance(); s }
+            Token::Ident(s) => {
+                self.advance();
+                s
+            }
             // 키워드도 앵커 이름/종류로 쓸 수 있게 허용
-            Token::Main     => { self.advance(); "main".to_string() }
-            Token::Function => { self.advance(); "function".to_string() }
-            Token::Vault    => { self.advance(); "vault".to_string() }
-            Token::Kill     => { self.advance(); "kill".to_string() }
-            Token::Exit     => { self.advance(); "exit".to_string() }
-            Token::Yield    => { self.advance(); "yield".to_string() }
-            Token::Return   => { self.advance(); "return".to_string() }
-            Token::If       => { self.advance(); "if".to_string() }
-            Token::Else     => { self.advance(); "else".to_string() }
-            Token::Loop     => { self.advance(); "loop".to_string() }
-            Token::For      => { self.advance(); "for".to_string() }
-            Token::In       => { self.advance(); "in".to_string() }
-            Token::Break    => { self.advance(); "break".to_string() }
-            Token::True     => { self.advance(); "true".to_string() }
-            Token::False    => { self.advance(); "false".to_string() }
-            Token::Free    => { self.advance(); "free".to_string() }
-            Token::Print   => { self.advance(); "print".to_string() }
-            Token::While   => { self.advance(); "while".to_string() }
-            Token::As      => { self.advance(); "as".to_string() }
-            Token::Struct  => { self.advance(); "struct".to_string() }
-            Token::Int      => { self.advance(); "int".to_string() }
-            Token::Float    => { self.advance(); "float".to_string() }
-            Token::String   => { self.advance(); "string".to_string() }
-            Token::Bool     => { self.advance(); "bool".to_string() }
-            Token::TyI8     => { self.advance(); "i8".to_string() }
-            Token::TyI16    => { self.advance(); "i16".to_string() }
-            Token::TyI32    => { self.advance(); "i32".to_string() }
-            Token::TyI64    => { self.advance(); "i64".to_string() }
-            Token::TyU8     => { self.advance(); "u8".to_string() }
-            Token::TyU16    => { self.advance(); "u16".to_string() }
-            Token::TyU32    => { self.advance(); "u32".to_string() }
-            Token::TyU64    => { self.advance(); "u64".to_string() }
-            Token::Auto     => { self.advance(); "auto".to_string() }
-            Token::Assert   => { self.advance(); "assert".to_string() }
-            Token::Enum     => { self.advance(); "enum".to_string() }
-            Token::Match    => { self.advance(); "match".to_string() }
-            Token::Trait    => { self.advance(); "trait".to_string() }
-            Token::Impl     => { self.advance(); "impl".to_string() }
-            Token::Mod      => { self.advance(); "mod".to_string() }
-            Token::Const    => { self.advance(); "const".to_string() }
-            Token::Import   => { self.advance(); "import".to_string() }
+            Token::Main => {
+                self.advance();
+                "main".to_string()
+            }
+            Token::Function => {
+                self.advance();
+                "function".to_string()
+            }
+            Token::Vault => {
+                self.advance();
+                "vault".to_string()
+            }
+            Token::Kill => {
+                self.advance();
+                "kill".to_string()
+            }
+            Token::Exit => {
+                self.advance();
+                "exit".to_string()
+            }
+            Token::Yield => {
+                self.advance();
+                "yield".to_string()
+            }
+            Token::Return => {
+                self.advance();
+                "return".to_string()
+            }
+            Token::If => {
+                self.advance();
+                "if".to_string()
+            }
+            Token::Else => {
+                self.advance();
+                "else".to_string()
+            }
+            Token::Loop => {
+                self.advance();
+                "loop".to_string()
+            }
+            Token::For => {
+                self.advance();
+                "for".to_string()
+            }
+            Token::In => {
+                self.advance();
+                "in".to_string()
+            }
+            Token::Break => {
+                self.advance();
+                "break".to_string()
+            }
+            Token::True => {
+                self.advance();
+                "true".to_string()
+            }
+            Token::False => {
+                self.advance();
+                "false".to_string()
+            }
+            Token::Free => {
+                self.advance();
+                "free".to_string()
+            }
+            Token::Print => {
+                self.advance();
+                "print".to_string()
+            }
+            Token::While => {
+                self.advance();
+                "while".to_string()
+            }
+            Token::As => {
+                self.advance();
+                "as".to_string()
+            }
+            Token::Struct => {
+                self.advance();
+                "struct".to_string()
+            }
+            Token::Int => {
+                self.advance();
+                "int".to_string()
+            }
+            Token::Float => {
+                self.advance();
+                "float".to_string()
+            }
+            Token::String => {
+                self.advance();
+                "string".to_string()
+            }
+            Token::Bool => {
+                self.advance();
+                "bool".to_string()
+            }
+            Token::TyI8 => {
+                self.advance();
+                "i8".to_string()
+            }
+            Token::TyI16 => {
+                self.advance();
+                "i16".to_string()
+            }
+            Token::TyI32 => {
+                self.advance();
+                "i32".to_string()
+            }
+            Token::TyI64 => {
+                self.advance();
+                "i64".to_string()
+            }
+            Token::TyU8 => {
+                self.advance();
+                "u8".to_string()
+            }
+            Token::TyU16 => {
+                self.advance();
+                "u16".to_string()
+            }
+            Token::TyU32 => {
+                self.advance();
+                "u32".to_string()
+            }
+            Token::TyU64 => {
+                self.advance();
+                "u64".to_string()
+            }
+            Token::Auto => {
+                self.advance();
+                "auto".to_string()
+            }
+            Token::Assert => {
+                self.advance();
+                "assert".to_string()
+            }
+            Token::Enum => {
+                self.advance();
+                "enum".to_string()
+            }
+            Token::Match => {
+                self.advance();
+                "match".to_string()
+            }
+            Token::Trait => {
+                self.advance();
+                "trait".to_string()
+            }
+            Token::Impl => {
+                self.advance();
+                "impl".to_string()
+            }
+            Token::Mod => {
+                self.advance();
+                "mod".to_string()
+            }
+            Token::Const => {
+                self.advance();
+                "const".to_string()
+            }
+            Token::Import => {
+                self.advance();
+                "import".to_string()
+            }
             t => {
                 self.errors.push(format!(
                     "Expected identifier but got {:?} at line {}:{}",
@@ -254,7 +430,7 @@ impl Parser {
                     self.current_col()
                 ));
                 "_error_".to_string()
-            },
+            }
         }
     }
 
@@ -267,28 +443,68 @@ impl Parser {
             let mut param_tys = Vec::new();
             while self.current() != &Token::RParen && self.current() != &Token::EOF {
                 param_tys.push(self.parse_ty());
-                if self.current() == &Token::Comma { self.advance(); }
+                if self.current() == &Token::Comma {
+                    self.advance();
+                }
             }
             self.expect(&Token::RParen);
             let ret_ty = if self.current() == &Token::Arrow {
                 self.advance();
                 Some(Box::new(self.parse_ty()))
-            } else { None };
+            } else {
+                None
+            };
             return Ty::Fn(param_tys, ret_ty);
         }
         let base = match self.current().clone() {
-            Token::Int    => { self.advance(); Ty::Int }
-            Token::Float  => { self.advance(); Ty::Float }
-            Token::String => { self.advance(); Ty::String }
-            Token::Bool   => { self.advance(); Ty::Bool }
-            Token::TyI8   => { self.advance(); Ty::I8 }
-            Token::TyI16  => { self.advance(); Ty::I16 }
-            Token::TyI32  => { self.advance(); Ty::I32 }
-            Token::TyI64  => { self.advance(); Ty::I64 }
-            Token::TyU8   => { self.advance(); Ty::U8 }
-            Token::TyU16  => { self.advance(); Ty::U16 }
-            Token::TyU32  => { self.advance(); Ty::U32 }
-            Token::TyU64  => { self.advance(); Ty::U64 }
+            Token::Int => {
+                self.advance();
+                Ty::Int
+            }
+            Token::Float => {
+                self.advance();
+                Ty::Float
+            }
+            Token::String => {
+                self.advance();
+                Ty::String
+            }
+            Token::Bool => {
+                self.advance();
+                Ty::Bool
+            }
+            Token::TyI8 => {
+                self.advance();
+                Ty::I8
+            }
+            Token::TyI16 => {
+                self.advance();
+                Ty::I16
+            }
+            Token::TyI32 => {
+                self.advance();
+                Ty::I32
+            }
+            Token::TyI64 => {
+                self.advance();
+                Ty::I64
+            }
+            Token::TyU8 => {
+                self.advance();
+                Ty::U8
+            }
+            Token::TyU16 => {
+                self.advance();
+                Ty::U16
+            }
+            Token::TyU32 => {
+                self.advance();
+                Ty::U32
+            }
+            Token::TyU64 => {
+                self.advance();
+                Ty::U64
+            }
             Token::Ident(name) => {
                 self.advance();
                 if self.enum_names.contains(&name) {
@@ -305,7 +521,7 @@ impl Parser {
                     self.current_col()
                 ));
                 Ty::Int // fallback
-            },
+            }
         };
         // int[] 같은 배열 타입
         if self.current() == &Token::LBracket {
@@ -323,7 +539,9 @@ impl Parser {
         if self.depth > MAX_DEPTH {
             self.errors.push(format!(
                 "Expression nesting too deep (>{}) at line {}:{}",
-                MAX_DEPTH, self.current_line(), self.current_col()
+                MAX_DEPTH,
+                self.current_line(),
+                self.current_col()
             ));
             self.depth -= 1;
             return Expr::IntLit(0);
@@ -336,10 +554,16 @@ impl Parser {
     fn parse_or(&mut self) -> Expr {
         let mut left = self.parse_and();
         loop {
-            if self.current() != &Token::Or { break; }
+            if self.current() != &Token::Or {
+                break;
+            }
             self.advance();
             let right = self.parse_and();
-            left = Expr::BinOp { left: Box::new(left), op: BinOpKind::Or, right: Box::new(right) };
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op: BinOpKind::Or,
+                right: Box::new(right),
+            };
         }
         left
     }
@@ -347,10 +571,16 @@ impl Parser {
     fn parse_and(&mut self) -> Expr {
         let mut left = self.parse_comparison();
         loop {
-            if self.current() != &Token::And { break; }
+            if self.current() != &Token::And {
+                break;
+            }
             self.advance();
             let right = self.parse_comparison();
-            left = Expr::BinOp { left: Box::new(left), op: BinOpKind::And, right: Box::new(right) };
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op: BinOpKind::And,
+                right: Box::new(right),
+            };
         }
         left
     }
@@ -359,17 +589,21 @@ impl Parser {
         let mut left = self.parse_additive();
         loop {
             let op = match self.current() {
-                Token::Lt   => BinOpKind::Lt,
-                Token::Gt   => BinOpKind::Gt,
-                Token::Le   => BinOpKind::Le,
-                Token::Ge   => BinOpKind::Ge,
+                Token::Lt => BinOpKind::Lt,
+                Token::Gt => BinOpKind::Gt,
+                Token::Le => BinOpKind::Le,
+                Token::Ge => BinOpKind::Ge,
                 Token::EqEq => BinOpKind::Eq,
-                Token::Neq  => BinOpKind::Neq,
+                Token::Neq => BinOpKind::Neq,
                 _ => break,
             };
             self.advance();
             let right = self.parse_additive();
-            left = Expr::BinOp { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
         }
         left
     }
@@ -378,13 +612,17 @@ impl Parser {
         let mut left = self.parse_multiplicative();
         loop {
             let op = match self.current() {
-                Token::Plus  => BinOpKind::Add,
+                Token::Plus => BinOpKind::Add,
                 Token::Minus => BinOpKind::Sub,
                 _ => break,
             };
             self.advance();
             let right = self.parse_multiplicative();
-            left = Expr::BinOp { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
         }
         left
     }
@@ -393,14 +631,18 @@ impl Parser {
         let mut left = self.parse_unary();
         loop {
             let op = match self.current() {
-                Token::Star    => BinOpKind::Mul,
-                Token::Slash   => BinOpKind::Div,
+                Token::Star => BinOpKind::Mul,
+                Token::Slash => BinOpKind::Div,
                 Token::Percent => BinOpKind::Mod,
                 _ => break,
             };
             self.advance();
             let right = self.parse_unary();
-            left = Expr::BinOp { left: Box::new(left), op, right: Box::new(right) };
+            left = Expr::BinOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
         }
         left
     }
@@ -410,12 +652,18 @@ impl Parser {
             Token::Minus => {
                 self.advance();
                 let expr = self.parse_unary();
-                Expr::UnaryOp { op: UnaryOpKind::Neg, expr: Box::new(expr) }
+                Expr::UnaryOp {
+                    op: UnaryOpKind::Neg,
+                    expr: Box::new(expr),
+                }
             }
             Token::Not => {
                 self.advance();
                 let expr = self.parse_unary();
-                Expr::UnaryOp { op: UnaryOpKind::Not, expr: Box::new(expr) }
+                Expr::UnaryOp {
+                    op: UnaryOpKind::Not,
+                    expr: Box::new(expr),
+                }
             }
             _ => self.parse_primary(),
         }
@@ -423,12 +671,27 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Expr {
         let mut expr = match self.current().clone() {
-            Token::IntLit(n)    => { self.advance(); Expr::IntLit(n) }
-            Token::FloatLit(f)  => { self.advance(); Expr::FloatLit(f) }
-            Token::StringLit(s) => { self.advance(); Expr::StringLit(s) }
-            Token::True         => { self.advance(); Expr::Bool(true) }
-            Token::False        => { self.advance(); Expr::Bool(false) }
-            Token::Ident(s)     => {
+            Token::IntLit(n) => {
+                self.advance();
+                Expr::IntLit(n)
+            }
+            Token::FloatLit(f) => {
+                self.advance();
+                Expr::FloatLit(f)
+            }
+            Token::StringLit(s) => {
+                self.advance();
+                Expr::StringLit(s)
+            }
+            Token::True => {
+                self.advance();
+                Expr::Bool(true)
+            }
+            Token::False => {
+                self.advance();
+                Expr::Bool(false)
+            }
+            Token::Ident(s) => {
                 self.advance();
                 if !self.no_struct_init && self.current() == &Token::LBrace {
                     self.advance();
@@ -467,7 +730,9 @@ impl Parser {
                 let mut elems = Vec::new();
                 while self.current() != &Token::RBracket {
                     elems.push(self.parse_expr());
-                    if self.current() == &Token::Comma { self.advance(); }
+                    if self.current() == &Token::Comma {
+                        self.advance();
+                    }
                 }
                 self.expect(&Token::RBracket);
                 Expr::ArrayLit(elems)
@@ -487,9 +752,13 @@ impl Parser {
                     let ty = if self.current() == &Token::Colon {
                         self.advance();
                         Some(self.parse_ty())
-                    } else { None };
+                    } else {
+                        None
+                    };
                     closure_params.push((pname, ty));
-                    if self.current() == &Token::Comma { self.advance(); }
+                    if self.current() == &Token::Comma {
+                        self.advance();
+                    }
                 }
                 self.expect(&Token::Pipe);
                 let body = if self.current() == &Token::LBrace {
@@ -502,7 +771,10 @@ impl Parser {
                     let span = self.current_span();
                     vec![(Stmt::Return(Some(e)), span)]
                 };
-                Expr::Closure { params: closure_params, body }
+                Expr::Closure {
+                    params: closure_params,
+                    body,
+                }
             }
             // f-string 리터럴 파싱
             Token::FStringLit(raw) => {
@@ -523,7 +795,7 @@ impl Parser {
                 ));
                 self.advance();
                 Expr::IntLit(0) // fallback
-            },
+            }
         };
         expr = self.parse_postfix_expr(expr);
         expr
@@ -537,12 +809,18 @@ impl Parser {
                     self.advance();
                     let index = self.parse_expr();
                     self.expect(&Token::RBracket);
-                    expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+                    expr = Expr::Index {
+                        array: Box::new(expr),
+                        index: Box::new(index),
+                    };
                 }
                 Token::As => {
                     self.advance();
                     let ty = self.parse_ty();
-                    expr = Expr::Cast { expr: Box::new(expr), ty };
+                    expr = Expr::Cast {
+                        expr: Box::new(expr),
+                        ty,
+                    };
                 }
                 Token::Dot => {
                     self.advance();
@@ -572,12 +850,21 @@ impl Parser {
                         let mut args = Vec::new();
                         while self.current() != &Token::RParen {
                             args.push(self.parse_expr());
-                            if self.current() == &Token::Comma { self.advance(); }
+                            if self.current() == &Token::Comma {
+                                self.advance();
+                            }
                         }
                         self.expect(&Token::RParen);
-                        expr = Expr::MethodCall { base: Box::new(expr), method: member, args };
+                        expr = Expr::MethodCall {
+                            base: Box::new(expr),
+                            method: member,
+                            args,
+                        };
                     } else {
-                        expr = Expr::FieldAccess { base: Box::new(expr), field: member };
+                        expr = Expr::FieldAccess {
+                            base: Box::new(expr),
+                            field: member,
+                        };
                     }
                 }
                 _ => break,
@@ -598,7 +885,11 @@ impl Parser {
             self.expect(&Token::Eq);
             let value = self.parse_expr();
             self.expect(&Token::Semicolon);
-            return Stmt::VarDecl { ty, name: var_name, value };
+            return Stmt::VarDecl {
+                ty,
+                name: var_name,
+                value,
+            };
         }
 
         // 구조체 배열 타입 변수 선언: User[] users = [...];
@@ -625,7 +916,9 @@ impl Parser {
             let mut args = Vec::new();
             while self.current() != &Token::RParen {
                 args.push(self.parse_expr());
-                if self.current() == &Token::Comma { self.advance(); }
+                if self.current() == &Token::Comma {
+                    self.advance();
+                }
             }
             self.expect(&Token::RParen);
             Expr::Call { name, args }
@@ -684,7 +977,7 @@ impl Parser {
                             self.current_col()
                         ));
                         Stmt::ExprStmt(Expr::IntLit(0))
-                    },
+                    }
                 },
                 Expr::FieldAccess { base, field } => match *base {
                     Expr::Ident(var_name) => Stmt::FieldAssign {
@@ -699,7 +992,7 @@ impl Parser {
                             self.current_col()
                         ));
                         Stmt::ExprStmt(Expr::IntLit(0))
-                    },
+                    }
                 },
                 _ => {
                     self.errors.push(format!(
@@ -708,7 +1001,7 @@ impl Parser {
                         self.current_col()
                     ));
                     Stmt::ExprStmt(Expr::IntLit(0))
-                },
+                }
             };
         }
 
@@ -779,7 +1072,9 @@ impl Parser {
                 let mut args = Vec::new();
                 while self.current() != &Token::RParen {
                     args.push(self.parse_expr());
-                    if self.current() == &Token::Comma { self.advance(); }
+                    if self.current() == &Token::Comma {
+                        self.advance();
+                    }
                 }
                 self.expect(&Token::RParen);
                 self.expect(&Token::Semicolon);
@@ -821,7 +1116,11 @@ impl Parser {
                 } else {
                     None
                 };
-                Stmt::If { cond, then_body, else_body }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                }
             }
             // loop
             Token::Loop => {
@@ -851,7 +1150,12 @@ impl Parser {
                 self.expect(&Token::LBrace);
                 let body = self.parse_body();
                 self.expect(&Token::RBrace);
-                Stmt::For { var, from, to, body }
+                Stmt::For {
+                    var,
+                    from,
+                    to,
+                    body,
+                }
             }
             // Vault 선언
             Token::Vault => {
@@ -864,9 +1168,18 @@ impl Parser {
                 Stmt::VaultDecl { ty, name, value }
             }
             // 변수 선언 or 대입 or 표현식
-            Token::Int | Token::Float | Token::String | Token::Bool
-            | Token::TyI8 | Token::TyI16 | Token::TyI32 | Token::TyI64
-            | Token::TyU8 | Token::TyU16 | Token::TyU32 | Token::TyU64 => {
+            Token::Int
+            | Token::Float
+            | Token::String
+            | Token::Bool
+            | Token::TyI8
+            | Token::TyI16
+            | Token::TyI32
+            | Token::TyI64
+            | Token::TyU8
+            | Token::TyU16
+            | Token::TyU32
+            | Token::TyU64 => {
                 let ty = self.parse_ty();
                 let name = self.eat_var_ident();
                 self.expect(&Token::Eq);
@@ -881,12 +1194,14 @@ impl Parser {
                 self.expect(&Token::Eq);
                 let value = self.parse_expr();
                 self.expect(&Token::Semicolon);
-                Stmt::VarDecl { ty: Ty::Auto, name, value }
+                Stmt::VarDecl {
+                    ty: Ty::Auto,
+                    name,
+                    value,
+                }
             }
             // match 문
-            Token::Match => {
-                self.parse_match_stmt()
-            }
+            Token::Match => self.parse_match_stmt(),
             // const 선언
             Token::Const => {
                 self.advance();
@@ -909,12 +1224,17 @@ impl Parser {
                     self.current_col()
                 ));
                 // 에러 복구: 세미콜론 또는 닫는 중괄호까지 스킵
-                while !matches!(self.current(), Token::Semicolon | Token::RBrace | Token::EOF) {
+                while !matches!(
+                    self.current(),
+                    Token::Semicolon | Token::RBrace | Token::EOF
+                ) {
                     self.advance();
                 }
-                if self.current() == &Token::Semicolon { self.advance(); }
+                if self.current() == &Token::Semicolon {
+                    self.advance();
+                }
                 Stmt::ExprStmt(Expr::IntLit(0))
-            },
+            }
         };
         (stmt, span)
     }
@@ -941,9 +1261,9 @@ impl Parser {
 
         let kind_ident = self.eat_ident();
         match kind_ident.as_str() {
-            "main"   => AnchorKind::Main,
+            "main" => AnchorKind::Main,
             "thread" => AnchorKind::Thread,
-            "event"  => {
+            "event" => {
                 self.expect(&Token::LParen);
                 let event_name = self.eat_ident();
                 self.expect(&Token::RParen);
@@ -957,7 +1277,7 @@ impl Parser {
                     self.current_col()
                 ));
                 AnchorKind::Plain
-            },
+            }
         }
     }
 
@@ -988,20 +1308,28 @@ impl Parser {
 
         self.expect(&Token::LBrace);
         // 본문 + 자식 앵커
-        let mut body     = Vec::new();
+        let mut body = Vec::new();
         let mut children = Vec::new();
 
         loop {
             match self.current() {
                 Token::RBrace | Token::EOF => break,
                 Token::Hash => self.skip_decorator(),
-                Token::At   => children.push(self.parse_child_anchor()),
+                Token::At => children.push(self.parse_child_anchor()),
                 _ => body.push(self.parse_stmt()),
             }
         }
         self.expect(&Token::RBrace);
 
-        (TopLevel::Anchor { name, kind, body, children }, span)
+        (
+            TopLevel::Anchor {
+                name,
+                kind,
+                body,
+                children,
+            },
+            span,
+        )
     }
 
     // 자식 앵커 파싱 (인라인과 동일하지만 TopLevel 반환)
@@ -1014,19 +1342,27 @@ impl Parser {
         self.expect(&Token::RParen);
 
         self.expect(&Token::LBrace);
-        let mut body     = Vec::new();
+        let mut body = Vec::new();
         let mut children = Vec::new();
         loop {
             match self.current() {
                 Token::RBrace | Token::EOF => break,
                 Token::Hash => self.skip_decorator(),
-                Token::At   => children.push(self.parse_child_anchor()),
+                Token::At => children.push(self.parse_child_anchor()),
                 _ => body.push(self.parse_stmt()),
             }
         }
         self.expect(&Token::RBrace);
 
-        (TopLevel::Anchor { name, kind, body, children }, span)
+        (
+            TopLevel::Anchor {
+                name,
+                kind,
+                body,
+                children,
+            },
+            span,
+        )
     }
 
     // 함수 파싱
@@ -1051,7 +1387,9 @@ impl Parser {
             while self.current() != &Token::Gt && self.current() != &Token::EOF {
                 let tp = self.eat_ident();
                 type_params.push(tp);
-                if self.current() == &Token::Comma { self.advance(); }
+                if self.current() == &Token::Comma {
+                    self.advance();
+                }
             }
             self.expect(&Token::Gt);
         }
@@ -1060,13 +1398,18 @@ impl Parser {
 
         let mut params = Vec::new();
         if let Some(owner) = &method_owner {
-            params.push(Param { ty: Ty::Struct(owner.clone()), name: "self".to_string() });
+            params.push(Param {
+                ty: Ty::Struct(owner.clone()),
+                name: "self".to_string(),
+            });
         }
         while self.current() != &Token::RParen {
-            let ty   = self.parse_ty();
+            let ty = self.parse_ty();
             let pname = self.eat_var_ident();
             params.push(Param { ty, name: pname });
-            if self.current() == &Token::Comma { self.advance(); }
+            if self.current() == &Token::Comma {
+                self.advance();
+            }
         }
         self.expect(&Token::RParen);
 
@@ -1081,7 +1424,17 @@ impl Parser {
         let body = self.parse_body();
         self.expect(&Token::RBrace);
 
-        (TopLevel::Function { name, type_params, params, return_ty, body, decorators: Vec::new() }, span)
+        (
+            TopLevel::Function {
+                name,
+                type_params,
+                params,
+                return_ty,
+                body,
+                decorators: Vec::new(),
+            },
+            span,
+        )
     }
 
     // struct 선언 파싱
@@ -1123,7 +1476,9 @@ impl Parser {
                 None
             };
             variants.push(EnumVariant { name: vname, ty });
-            if self.current() == &Token::Comma { self.advance(); }
+            if self.current() == &Token::Comma {
+                self.advance();
+            }
         }
         self.expect(&Token::RBrace);
 
@@ -1147,7 +1502,9 @@ impl Parser {
             self.expect(&Token::RBrace);
             arms.push(MatchArm { pattern, body });
             // optional trailing comma
-            if self.current() == &Token::Comma { self.advance(); }
+            if self.current() == &Token::Comma {
+                self.advance();
+            }
         }
         self.expect(&Token::RBrace);
 
@@ -1157,11 +1514,26 @@ impl Parser {
     // 패턴 파싱
     fn parse_pattern(&mut self) -> Pattern {
         match self.current().clone() {
-            Token::IntLit(n) => { self.advance(); Pattern::IntLit(n) }
-            Token::FloatLit(f) => { self.advance(); Pattern::FloatLit(f) }
-            Token::StringLit(s) => { self.advance(); Pattern::StringLit(s) }
-            Token::True  => { self.advance(); Pattern::Bool(true) }
-            Token::False => { self.advance(); Pattern::Bool(false) }
+            Token::IntLit(n) => {
+                self.advance();
+                Pattern::IntLit(n)
+            }
+            Token::FloatLit(f) => {
+                self.advance();
+                Pattern::FloatLit(f)
+            }
+            Token::StringLit(s) => {
+                self.advance();
+                Pattern::StringLit(s)
+            }
+            Token::True => {
+                self.advance();
+                Pattern::Bool(true)
+            }
+            Token::False => {
+                self.advance();
+                Pattern::Bool(false)
+            }
             Token::Minus => {
                 // 음수 리터럴: -42
                 self.advance();
@@ -1171,7 +1543,8 @@ impl Parser {
                 } else {
                     self.errors.push(format!(
                         "Expected integer after '-' in pattern at line {}:{}",
-                        self.current_line(), self.current_col()
+                        self.current_line(),
+                        self.current_col()
                     ));
                     Pattern::Wildcard
                 }
@@ -1192,7 +1565,11 @@ impl Parser {
                     } else {
                         None
                     };
-                    Pattern::EnumVariant { enum_name: name, variant, binding }
+                    Pattern::EnumVariant {
+                        enum_name: name,
+                        variant,
+                        binding,
+                    }
                 } else {
                     // wildcard: _ 또는 그냥 identifier (사용 안 함 — wildcard 취급)
                     Pattern::Wildcard
@@ -1201,7 +1578,8 @@ impl Parser {
             _ => {
                 self.errors.push(format!(
                     "Expected pattern at line {}:{}",
-                    self.current_line(), self.current_col()
+                    self.current_line(),
+                    self.current_col()
                 ));
                 self.advance();
                 Pattern::Wildcard
@@ -1214,8 +1592,8 @@ impl Parser {
         let mut items = Vec::new();
         loop {
             match self.current() {
-                Token::EOF      => break,
-                Token::Hash     => {
+                Token::EOF => break,
+                Token::Hash => {
                     // A10: 연속 decorator 수집 → 이어서 fn에 부착
                     let mut dec_names = Vec::new();
                     while self.current() == &Token::Hash {
@@ -1223,22 +1601,27 @@ impl Parser {
                     }
                     if self.current() == &Token::Function {
                         let (mut tl, sp) = self.parse_function();
-                        if let TopLevel::Function { ref mut decorators, .. } = tl {
+                        if let TopLevel::Function {
+                            ref mut decorators, ..
+                        } = tl
+                        {
                             decorators.extend(dec_names);
                         }
                         items.push((tl, sp));
                     }
                     // decorator가 fn이 아닌 곳에 붙은 경우 무시
                 }
-                Token::At       => items.push(self.parse_anchor()),
+                Token::At => items.push(self.parse_anchor()),
                 Token::Function => items.push(self.parse_function()),
-                Token::Struct   => items.push(self.parse_struct()),
-                Token::Enum     => items.push(self.parse_enum()),
-                Token::Trait    => items.push(self.parse_trait()),
-                Token::Impl     => items.push(self.parse_impl()),
-                Token::Mod      => items.push(self.parse_mod()),
-                Token::Import   => { self.advance(); /* import는 현재 무시 */ }
-                Token::Const    => {
+                Token::Struct => items.push(self.parse_struct()),
+                Token::Enum => items.push(self.parse_enum()),
+                Token::Trait => items.push(self.parse_trait()),
+                Token::Impl => items.push(self.parse_impl()),
+                Token::Mod => items.push(self.parse_mod()),
+                Token::Import => {
+                    self.advance(); /* import는 현재 무시 */
+                }
+                Token::Const => {
                     let span = self.current_span();
                     self.advance();
                     let ty = self.parse_ty();
@@ -1256,10 +1639,9 @@ impl Parser {
                         self.current_col()
                     ));
                     self.advance(); // 에러 복구: 스킵
-                },
+                }
             }
         }
         Program { items }
     }
 }
-

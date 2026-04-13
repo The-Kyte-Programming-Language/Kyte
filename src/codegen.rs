@@ -6,16 +6,16 @@ use inkwell::types::StructType;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::IntPredicate;
-use inkwell::FloatPredicate;
 use inkwell::AddressSpace;
 use inkwell::basic_block::BasicBlock;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode,
-    Target, TargetMachine,
-};
+use inkwell::execution_engine::ExecutionEngine;
 use inkwell::OptimizationLevel;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+
+#[path = "codegen/runtime.rs"]
+mod runtime;
+#[path = "codegen/ops.rs"]
+mod ops;
 
 pub struct Codegen<'ctx> {
     context:   &'ctx Context,
@@ -30,6 +30,15 @@ pub struct Codegen<'ctx> {
     string_globals: HashMap<String, PointerValue<'ctx>>,
     string_global_counter: u64,
     struct_size_cache: HashMap<String, u64>,
+
+    /// enum 정의 (variants)
+    enum_defs: HashMap<String, Vec<crate::ast::EnumVariant>>,
+    /// enum LLVM 타입 { i32 tag, [max_payload_size x i8] }
+    enum_types: HashMap<String, StructType<'ctx>>,
+    /// enum variant 태그 매핑: enum_name -> variant_name -> tag_index
+    enum_variant_tags: HashMap<String, HashMap<String, u32>>,
+    /// enum payload 크기
+    enum_payload_sizes: HashMap<String, u64>,
 
     /// 배열 길이 추적
     array_lengths: HashMap<String, u64>,
@@ -72,6 +81,12 @@ pub struct Codegen<'ctx> {
 
     /// 임시 문자열 힙 버퍼 (concat / to_string_ptr) 추적 — scope cleanup 시 해제 (M05)
     string_temp_stack: Vec<Vec<PointerValue<'ctx>>>,
+
+    /// 클로저 익명 함수 카운터
+    closure_counter: u64,
+
+    /// 등록된 모듈 이름 목록 (mod call 해석용)
+    module_names: std::collections::HashSet<String>,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -92,6 +107,10 @@ impl<'ctx> Codegen<'ctx> {
             string_globals: HashMap::new(),
             string_global_counter: 0,
             struct_size_cache: HashMap::new(),
+            enum_defs: HashMap::new(),
+            enum_types: HashMap::new(),
+            enum_variant_tags: HashMap::new(),
+            enum_payload_sizes: HashMap::new(),
             array_lengths: HashMap::new(),
             vault_vars: std::collections::HashSet::new(),
             freed_vault_vars: std::collections::HashSet::new(),
@@ -108,6 +127,8 @@ impl<'ctx> Codegen<'ctx> {
             debug_mode: true,
             opt_level: OptimizationLevel::None,
             string_temp_stack: Vec::new(),
+            closure_counter: 0,
+            module_names: std::collections::HashSet::new(),
         }
     }
 
@@ -144,7 +165,8 @@ impl<'ctx> Codegen<'ctx> {
             Ty::String        => self.ptr_type().into(),
             Ty::Array(_)      => self.ptr_type().into(),
             Ty::Struct(name)  => self.struct_types[name].into(),
-            Ty::Auto          => self.i64_type().into(), // fallback — should be resolved before codegen
+            Ty::Enum(name)    => self.enum_types.get(name).map(|t| (*t).into()).unwrap_or(self.i64_type().into()),
+            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => self.i64_type().into(), // fallback
         }
     }
 
@@ -156,6 +178,7 @@ impl<'ctx> Codegen<'ctx> {
             Ty::I32 | Ty::U32 => self.context.i32_type(),
             Ty::Int | Ty::I64 | Ty::U64 => self.i64_type(),
             Ty::Bool => self.bool_type(),
+            Ty::Enum(_) | Ty::Auto | Ty::TypeParam(_) => self.i64_type(),
             _ => self.i64_type(),
         }
     }
@@ -172,7 +195,8 @@ impl<'ctx> Codegen<'ctx> {
             Ty::String         => self.ptr_type().into(),
             Ty::Array(_)       => self.ptr_type().into(),
             Ty::Struct(name)   => self.struct_types[name].into(),
-            Ty::Auto           => self.i64_type().into(), // fallback
+            Ty::Enum(name)     => self.enum_types.get(name).map(|t| (*t).into()).unwrap_or(self.i64_type().into()),
+            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => self.i64_type().into(), // fallback
         }
     }
 
@@ -183,56 +207,6 @@ impl<'ctx> Codegen<'ctx> {
     fn is_integer_ty(ty: &Ty) -> bool {
         matches!(ty, Ty::Int | Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64
                     | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
-    }
-
-    fn declare_printf(&mut self) {
-        if self.module.get_function("printf").is_some() { return; }
-        let i32_type = self.context.i32_type();
-        let fn_type = i32_type.fn_type(&[self.ptr_type().into()], true);
-        self.module.add_function("printf", fn_type, Some(inkwell::module::Linkage::External));
-    }
-
-    fn declare_exit_fn(&mut self) {
-        if self.module.get_function("exit").is_some() { return; }
-        let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(&[self.context.i32_type().into()], false);
-        self.module.add_function("exit", fn_type, Some(inkwell::module::Linkage::External));
-    }
-
-    fn declare_snprintf(&mut self) {
-        if self.module.get_function("snprintf").is_some() { return; }
-        let i32_type = self.context.i32_type();
-        let fn_type = i32_type.fn_type(
-            &[self.ptr_type().into(), self.i64_type().into(), self.ptr_type().into()],
-            true,
-        );
-        self.module.add_function("snprintf", fn_type, Some(inkwell::module::Linkage::External));
-    }
-
-    fn declare_strlen(&mut self) {
-        if self.module.get_function("strlen").is_some() { return; }
-        let fn_type = self.i64_type().fn_type(&[self.ptr_type().into()], false);
-        self.module.add_function("strlen", fn_type, Some(inkwell::module::Linkage::External));
-    }
-
-    fn declare_malloc(&mut self) {
-        if self.module.get_function("malloc").is_some() { return; }
-        let fn_type = self.ptr_type().fn_type(&[self.i64_type().into()], false);
-        self.module.add_function("malloc", fn_type, Some(inkwell::module::Linkage::External));
-    }
-
-    fn declare_free_fn(&mut self) {
-        if self.module.get_function("free").is_some() { return; }
-        let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(&[self.ptr_type().into()], false);
-        self.module.add_function("free", fn_type, Some(inkwell::module::Linkage::External));
-    }
-
-    fn declare_strcmp(&mut self) {
-        if self.module.get_function("strcmp").is_some() { return; }
-        let i32_type = self.context.i32_type();
-        let fn_type = i32_type.fn_type(&[self.ptr_type().into(), self.ptr_type().into()], false);
-        self.module.add_function("strcmp", fn_type, Some(inkwell::module::Linkage::External));
     }
 
     fn build_alloca(&self, name: &str, ty: &Ty) -> PointerValue<'ctx> {
@@ -276,7 +250,11 @@ impl<'ctx> Codegen<'ctx> {
             Ty::Float => 8,
             Ty::String | Ty::Array(_) => 8, // pointer size
             Ty::Struct(name) => self.struct_size_bytes(name, visiting),
-            Ty::Auto => 8, // fallback
+            Ty::Enum(name) => {
+                let payload = self.enum_payload_sizes.get(name).copied().unwrap_or(0);
+                4 + payload // tag (i32) + payload
+            }
+            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => 8, // fallback
         }
     }
 
@@ -326,17 +304,24 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn load_var(&self, name: &str, ty: &Ty) -> BasicValueEnum<'ctx> {
-        let ptr = self.variables[name];
-        if self.vault_vars.contains(name) {
-            // vault: alloca → heap pointer → actual value
-            let heap_ptr = self.builder.build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
-                .unwrap().into_pointer_value();
+        if let Some(&ptr) = self.variables.get(name) {
+            if self.vault_vars.contains(name) {
+                // vault: alloca → heap pointer → actual value
+                let heap_ptr = self.builder.build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
+                    .unwrap().into_pointer_value();
+                let llvm_ty = self.ty_to_basic(ty);
+                return self.builder.build_load(llvm_ty, heap_ptr, name).unwrap();
+            }
             let llvm_ty = self.ty_to_basic(ty);
-            self.builder.build_load(llvm_ty, heap_ptr, name).unwrap()
-        } else {
-            let llvm_ty = self.ty_to_basic(ty);
-            self.builder.build_load(llvm_ty, ptr, name).unwrap()
+            return self.builder.build_load(llvm_ty, ptr, name).unwrap();
         }
+        // 전역 상수 로드
+        if let Some(global) = self.module.get_global(name) {
+            let llvm_ty = self.ty_to_basic(ty);
+            return self.builder.build_load(llvm_ty, global.as_pointer_value(), name).unwrap();
+        }
+        // fallback: 0
+        self.i64_type().const_int(0, false).into()
     }
 
     fn free_vault_var(&mut self, name: &str) {
@@ -557,6 +542,31 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(ok_bb);
     }
 
+    /// 배열 길이를 모를 때 음수 인덱스만 검사
+    fn emit_negative_index_check(&mut self, idx: inkwell::values::IntValue<'ctx>, arr_name: &str) {
+        let func = self.current_fn.unwrap();
+        let neg = self.builder
+            .build_int_compare(IntPredicate::SLT, idx, self.i64_type().const_int(0, false), "idx_neg")
+            .unwrap();
+        let ok_bb = self.context.append_basic_block(func, "neg_ok");
+        let fail_bb = self.context.append_basic_block(func, "neg_fail");
+        self.builder.build_conditional_branch(neg, fail_bb, ok_bb).unwrap();
+
+        self.builder.position_at_end(fail_bb);
+        let printf = self.module.get_function("printf").unwrap();
+        let fmt = self.global_string_ptr(
+            "runtime error: array '%s' negative index %lld\\n",
+            "neg_fmt",
+        );
+        let name_ptr = self.global_string_ptr(arr_name, &format!("arr_name_{}", arr_name));
+        self.builder.build_call(printf, &[fmt.into(), name_ptr.into(), idx.into()], "").unwrap();
+        let exit_fn = self.module.get_function("exit").unwrap();
+        self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_bb);
+    }
+
     fn cleanup_current_scope(&mut self) {
         if let Some(names) = self.vault_scope_stack.pop() {
             for name in names.into_iter().rev() {
@@ -590,18 +600,64 @@ impl<'ctx> Codegen<'ctx> {
         self.declare_free_fn();
         self.declare_strcmp();
 
-        // 0단계: struct 타입 선언/본문 설정
+        // 0단계: struct/enum 타입 선언/본문 설정
         for (item, _) in &program.items {
             if let TopLevel::Struct { name, fields } = item {
                 let st = self.context.opaque_struct_type(name);
                 self.struct_types.insert(name.clone(), st);
                 self.struct_defs.insert(name.clone(), fields.clone());
             }
+            if let TopLevel::Enum { name, variants } = item {
+                // enum = { i32 tag, [payload_size x i8] }
+                let mut max_payload: u64 = 0;
+                let mut tags = HashMap::new();
+                for (idx, v) in variants.iter().enumerate() {
+                    tags.insert(v.name.clone(), idx as u32);
+                    if let Some(ref ty) = v.ty {
+                        let sz = self.type_size_bytes(ty);
+                        if sz > max_payload { max_payload = sz; }
+                    }
+                }
+                self.enum_variant_tags.insert(name.clone(), tags);
+                self.enum_payload_sizes.insert(name.clone(), max_payload);
+                self.enum_defs.insert(name.clone(), variants.clone());
+
+                let st = self.context.opaque_struct_type(name);
+                let mut body_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> = vec![
+                    self.context.i32_type().into(), // tag
+                ];
+                if max_payload > 0 {
+                    body_types.push(self.context.i8_type().array_type(max_payload as u32).into());
+                }
+                st.set_body(&body_types, false);
+                self.enum_types.insert(name.clone(), st);
+            }
         }
         for (name, fields) in self.struct_defs.clone() {
             if let Some(st) = self.struct_types.get(&name).copied() {
                 let field_types: Vec<_> = fields.iter().map(|f| self.ty_to_basic(&f.ty)).collect();
                 st.set_body(&field_types, false);
+            }
+        }
+
+        // 0.5단계: 최상위 const를 LLVM global variable로 emit
+        for (item, _) in &program.items {
+            if let TopLevel::ConstDecl { ty, name, value } = item {
+                let llvm_ty = self.ty_to_basic(ty);
+                let global = self.module.add_global(llvm_ty.as_basic_type_enum(), None, name);
+                global.set_constant(true);
+                // 간단한 상수 표현식만 지원 (리터럴)
+                let init_val: inkwell::values::BasicValueEnum = match value {
+                    Expr::IntLit(n) => {
+                        let it = self.ty_to_int_type(ty);
+                        it.const_int(*n as u64, *n < 0).into()
+                    }
+                    Expr::FloatLit(f) => self.f64_type().const_float(*f).into(),
+                    Expr::StringLit(s) => self.global_string_ptr(s, name).into(),
+                    Expr::Bool(b) => self.bool_type().const_int(*b as u64, false).into(),
+                    _ => llvm_ty.const_zero(),
+                };
+                global.set_initializer(&init_val);
             }
         }
 
@@ -623,11 +679,78 @@ impl<'ctx> Codegen<'ctx> {
                 self.functions.insert(name.clone(), func);
                 self.fn_return_tys.insert(name.clone(), return_ty.clone());
             }
+            // impl 블록의 메서드를 TraitName_TypeName_method 로 등록
+            if let TopLevel::Impl { trait_name, target_ty, methods } = item {
+                for (method_tl, _) in methods {
+                    if let TopLevel::Function { name: mname, params, return_ty, .. } = method_tl {
+                        let qualified = format!("{}_{}_{}", trait_name, target_ty, mname);
+                        let param_types: Vec<BasicMetadataTypeEnum> =
+                            params.iter().map(|p| self.ty_to_llvm(&p.ty)).collect();
+                        let fn_type = match return_ty {
+                            Some(ty) => self.ty_to_basic(ty).fn_type(&param_types, false),
+                            None => self.context.void_type().fn_type(&param_types, false),
+                        };
+                        let func = self.module.add_function(&qualified, fn_type, None);
+                        self.functions.insert(qualified.clone(), func);
+                        self.fn_return_tys.insert(qualified, return_ty.clone());
+                    }
+                }
+            }
+            // mod 블록의 함수를 modname_funcname 으로 등록
+            if let TopLevel::Module { name: modname, items: mod_items } = item {
+                self.module_names.insert(modname.clone());
+                for (mod_tl, _) in mod_items {
+                    if let TopLevel::Function { name: fn_name, params, return_ty, .. } = mod_tl {
+                        let qualified = format!("{}_{}", modname, fn_name);
+                        let param_types: Vec<BasicMetadataTypeEnum> =
+                            params.iter().map(|p| self.ty_to_llvm(&p.ty)).collect();
+                        let fn_type = match return_ty {
+                            Some(ty) => self.ty_to_basic(ty).fn_type(&param_types, false),
+                            None => self.context.void_type().fn_type(&param_types, false),
+                        };
+                        let func = self.module.add_function(&qualified, fn_type, None);
+                        self.functions.insert(qualified.clone(), func);
+                        self.fn_return_tys.insert(qualified, return_ty.clone());
+                    }
+                }
+            }
         }
 
         // 2단계: 함수 본문 생성
+        // helper closure — compile a function body given qualified name + TopLevel::Function
+        struct FnToCompile<'a> {
+            name: String,
+            params: &'a Vec<Param>,
+            return_ty: &'a Option<Ty>,
+            body: &'a Vec<(Stmt, Span)>,
+        }
+        let mut fns_to_compile: Vec<FnToCompile> = Vec::new();
         for (item, _) in &program.items {
-            if let TopLevel::Function { name, params, return_ty, body, decorators: _ } = item {
+            if let TopLevel::Function { name, params, return_ty, body, .. } = item {
+                fns_to_compile.push(FnToCompile { name: name.clone(), params, return_ty, body });
+            }
+            if let TopLevel::Impl { trait_name, target_ty, methods } = item {
+                for (method_tl, _) in methods {
+                    if let TopLevel::Function { name: mname, params, return_ty, body, .. } = method_tl {
+                        let qname = format!("{}_{}_{}", trait_name, target_ty, mname);
+                        fns_to_compile.push(FnToCompile { name: qname, params, return_ty, body });
+                    }
+                }
+            }
+            if let TopLevel::Module { name: modname, items: mod_items } = item {
+                for (mod_tl, _) in mod_items {
+                    if let TopLevel::Function { name: fn_name, params, return_ty, body, .. } = mod_tl {
+                        let qname = format!("{}_{}", modname, fn_name);
+                        fns_to_compile.push(FnToCompile { name: qname, params, return_ty, body });
+                    }
+                }
+            }
+        }
+        for fn_info in &fns_to_compile {
+            let name = &fn_info.name;
+            let params = fn_info.params;
+            let return_ty = fn_info.return_ty;
+            let body = fn_info.body;
                 let func = self.functions[name];
                 self.current_fn = Some(func);
                 self.vault_scope_stack.clear();
@@ -670,7 +793,6 @@ impl<'ctx> Codegen<'ctx> {
 
                 self.variables = saved_vars;
                 self.var_types = saved_types;
-            }
         }
 
         // 3단계: main 앵커 → C main 함수
@@ -1229,9 +1351,8 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
 
-            Stmt::Free(name) => {
-                self.free_vault_var(name);
-                // 일반 변수에 free 호출되면 무시 (analyzer가 이미 경고)
+            Stmt::Free(_name) => {
+                // 자동 메모리 관리: free()는 무시 (scope exit 시 자동 해제)
             }
 
             Stmt::Yield(e) => {
@@ -1325,8 +1446,163 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.position_at_end(merge_bb);
             }
 
+            Stmt::Match { expr, arms } => {
+                let func = self.current_fn.unwrap();
+                let val = self.compile_expr(expr, params);
+                let expr_ty = self.guess_expr_ty(expr, params);
+                let merge_bb = self.context.append_basic_block(func, "match_merge");
+
+                if let Ty::Enum(ref ename) = expr_ty {
+                    // ── enum match: LLVM switch on tag ──
+                    let enum_struct = val.into_struct_value();
+                    let tag = self.builder
+                        .build_extract_value(enum_struct, 0, "enum_tag")
+                        .unwrap()
+                        .into_int_value();
+
+                    // Create arm basic blocks upfront
+                    let arm_bbs: Vec<BasicBlock<'ctx>> = (0..arms.len())
+                        .map(|i| self.context.append_basic_block(func, &format!("match_arm_{}", i)))
+                        .collect();
+                    let default_bb = self.context.append_basic_block(func, "match_default");
+
+                    // Collect switch cases
+                    let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+                    let mut wildcard_idx: Option<usize> = None;
+                    for (i, arm) in arms.iter().enumerate() {
+                        match &arm.pattern {
+                            Pattern::EnumVariant { variant, .. } => {
+                                if let Some(tags) = self.enum_variant_tags.get(ename) {
+                                    if let Some(&tv) = tags.get(variant) {
+                                        cases.push((self.context.i32_type().const_int(tv as u64, false), arm_bbs[i]));
+                                    }
+                                }
+                            }
+                            Pattern::Wildcard => { wildcard_idx = Some(i); }
+                            _ => {}
+                        }
+                    }
+
+                    // Emit switch (tag → arm block)
+                    let actual_default = wildcard_idx.map(|i| arm_bbs[i]).unwrap_or(default_bb);
+                    self.builder.build_switch(tag, actual_default, &cases).unwrap();
+
+                    // Compile each arm
+                    let ename_clone = ename.clone();
+                    for (i, arm) in arms.iter().enumerate() {
+                        self.builder.position_at_end(arm_bbs[i]);
+
+                        // Extract payload binding if needed
+                        if let Pattern::EnumVariant { variant, binding: Some(bind_name), .. } = &arm.pattern {
+                            if let Some(variants) = self.enum_defs.get(&ename_clone).cloned() {
+                                if let Some(v) = variants.iter().find(|v| v.name == *variant) {
+                                    if let Some(ref payload_ty) = v.ty {
+                                        let enum_alloca = self.build_alloca(&format!("match_enum_{}", i), &Ty::Enum(ename_clone.clone()));
+                                        self.builder.build_store(enum_alloca, val).unwrap();
+                                        let enum_st = self.enum_types[&ename_clone];
+                                        let payload_ptr = self.builder
+                                            .build_struct_gep(enum_st, enum_alloca, 1, "payload_ptr")
+                                            .unwrap();
+                                        let payload_llvm_ty = self.ty_to_basic(payload_ty);
+                                        let payload_val = self.builder
+                                            .build_load(payload_llvm_ty, payload_ptr, bind_name)
+                                            .unwrap();
+                                        let bind_alloca = self.build_alloca(bind_name, payload_ty);
+                                        self.builder.build_store(bind_alloca, payload_val).unwrap();
+                                        self.variables.insert(bind_name.clone(), bind_alloca);
+                                        self.var_types.insert(bind_name.clone(), payload_ty.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        self.compile_stmts(&arm.body, params);
+                        if self.no_terminator() {
+                            self.builder.build_unconditional_branch(merge_bb).unwrap();
+                        }
+                    }
+
+                    // Default block → merge (always needs a terminator)
+                    self.builder.position_at_end(default_bb);
+                    if self.no_terminator() {
+                        self.builder.build_unconditional_branch(merge_bb).unwrap();
+                    }
+
+                    self.builder.position_at_end(merge_bb);
+                } else {
+                    // ── value match: if-else chain ──
+                    let mut remaining_bb = self.context.append_basic_block(func, "match_else_0");
+                    self.builder.build_unconditional_branch(remaining_bb).unwrap();
+
+                    for (i, arm) in arms.iter().enumerate() {
+                        self.builder.position_at_end(remaining_bb);
+                        let arm_bb = self.context.append_basic_block(func, &format!("match_arm_{}", i));
+                        let next_bb = if i + 1 < arms.len() {
+                            self.context.append_basic_block(func, &format!("match_else_{}", i + 1))
+                        } else {
+                            merge_bb
+                        };
+
+                        match &arm.pattern {
+                            Pattern::IntLit(n) => {
+                                let cmp_val = self.i64_type().const_int(*n as u64, true);
+                                let cond = self.builder
+                                    .build_int_compare(IntPredicate::EQ, val.into_int_value(), cmp_val, "mcmp")
+                                    .unwrap();
+                                self.builder.build_conditional_branch(cond, arm_bb, next_bb).unwrap();
+                            }
+                            Pattern::Bool(b) => {
+                                let cmp_val = self.bool_type().const_int(if *b { 1 } else { 0 }, false);
+                                let cond = self.builder
+                                    .build_int_compare(IntPredicate::EQ, val.into_int_value(), cmp_val, "mcmp")
+                                    .unwrap();
+                                self.builder.build_conditional_branch(cond, arm_bb, next_bb).unwrap();
+                            }
+                            Pattern::StringLit(s) => {
+                                self.declare_strcmp();
+                                let strcmp_fn = self.module.get_function("strcmp").unwrap();
+                                let str_ptr = self.global_string_ptr(s, &format!("mstr_{}", i));
+                                let cmp_result = self.builder.build_call(strcmp_fn, &[val.into(), str_ptr.into()], "scmp")
+                                    .unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+                                let zero = self.context.i32_type().const_int(0, false);
+                                let cond = self.builder
+                                    .build_int_compare(IntPredicate::EQ, cmp_result, zero, "mcmp")
+                                    .unwrap();
+                                self.builder.build_conditional_branch(cond, arm_bb, next_bb).unwrap();
+                            }
+                            Pattern::Wildcard => {
+                                self.builder.build_unconditional_branch(arm_bb).unwrap();
+                            }
+                            _ => {
+                                self.builder.build_unconditional_branch(next_bb).unwrap();
+                            }
+                        }
+
+                        self.builder.position_at_end(arm_bb);
+                        self.compile_stmts(&arm.body, params);
+                        if self.no_terminator() {
+                            self.builder.build_unconditional_branch(merge_bb).unwrap();
+                        }
+                        remaining_bb = next_bb;
+                    }
+
+                    if remaining_bb != merge_bb {
+                        self.builder.position_at_end(remaining_bb);
+                        if self.no_terminator() {
+                            self.builder.build_unconditional_branch(merge_bb).unwrap();
+                        }
+                    }
+
+                    self.builder.position_at_end(merge_bb);
+                }
+            }
+
             Stmt::ExprStmt(e) => {
                 self.compile_expr(e, params);
+            }
+            Stmt::ConstDecl { ty, name, value } => {
+                // const는 VarDecl과 동일하게 코드젠 (불변성은 정적 분석)
+                self.compile_stmt(&Stmt::VarDecl { ty: ty.clone(), name: name.clone(), value: value.clone() }, params);
             }
         }
     }
@@ -1473,6 +1749,25 @@ impl<'ctx> Codegen<'ctx> {
                     return self.i64_type().const_int(0, false).into();
                 }
 
+                // 함수 포인터 변수로 간주 (클로저 호출)
+                if self.functions.get(name).is_none() {
+                    if let Some(&fn_ptr_alloca) = self.variables.get(name) {
+                        let fn_ptr = self.builder.build_load(self.ptr_type(), fn_ptr_alloca, name).unwrap().into_pointer_value();
+                        let compiled_args: Vec<BasicMetadataValueEnum> =
+                            args.iter().map(|a| self.compile_expr(a, params).into()).collect();
+                        let arg_types: Vec<BasicMetadataTypeEnum> = compiled_args.iter().map(|a| match a {
+                            BasicMetadataValueEnum::IntValue(v) => v.get_type().into(),
+                            BasicMetadataValueEnum::PointerValue(v) => v.get_type().into(),
+                            BasicMetadataValueEnum::FloatValue(v) => v.get_type().into(),
+                            _ => self.i64_type().into(),
+                        }).collect();
+                        let fn_type = self.i64_type().fn_type(&arg_types, false);
+                        let call_site = self.builder.build_indirect_call(fn_type, fn_ptr, &compiled_args, "closure_ret").unwrap();
+                        return call_site.try_as_basic_value().basic().unwrap_or_else(|| self.i64_type().const_int(0, false).into());
+                    }
+                    return self.i64_type().const_int(0, false).into();
+                }
+
                 let func = self.functions[name];
                 let compiled_args: Vec<BasicMetadataValueEnum> =
                     args.iter().map(|a| self.compile_expr(a, params).into()).collect();
@@ -1482,6 +1777,21 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap_or_else(|| self.i64_type().const_int(0, false).into())
             }
             Expr::MethodCall { base, method, args } => {
+                // mod.func() 호출: base가 모듈 이름인 경우
+                if let Expr::Ident(base_name) = base.as_ref() {
+                    if self.module_names.contains(base_name.as_str()) {
+                        let qualified = format!("{}_{}", base_name, method);
+                        if let Some(&func) = self.functions.get(&qualified) {
+                            let compiled_args: Vec<BasicMetadataValueEnum> =
+                                args.iter().map(|a| self.compile_expr(a, params).into()).collect();
+                            let call_site = self.builder.build_call(func, &compiled_args, &format!("{}_ret", qualified)).unwrap();
+                            return call_site
+                                .try_as_basic_value()
+                                .basic()
+                                .unwrap_or_else(|| self.i64_type().const_int(0, false).into());
+                        }
+                    }
+                }
                 if let Ty::Struct(sname) = self.guess_expr_ty(base, params) {
                     let fn_name = format!("{}.{}", sname, method);
                     if let Some(func) = self.functions.get(&fn_name).copied() {
@@ -1527,10 +1837,17 @@ impl<'ctx> Codegen<'ctx> {
                 let arr_name = if let Expr::Ident(n) = array.as_ref() { Some(n.clone()) } else { None };
                 let data_ptr = self.compile_expr(array, params).into_pointer_value();
                 let idx = self.compile_expr(index, params).into_int_value();
+                let display_name = arr_name.as_deref().unwrap_or("<expr>");
                 if let Some(ref n) = arr_name {
                     if let Some(&arr_len) = self.array_lengths.get(n) {
                         self.emit_bounds_check(idx, arr_len, n);
+                    } else {
+                        // 길이를 모르는 배열: 음수 인덱스만 검사
+                        self.emit_negative_index_check(idx, display_name);
                     }
+                } else {
+                    // 이름 없는 배열 표현식: 음수 인덱스 검사
+                    self.emit_negative_index_check(idx, display_name);
                 }
                 let elem_llvm_ty = self.elem_llvm_type(&inner);
                 let gep = unsafe {
@@ -1577,338 +1894,148 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 self.i64_type().const_int(0, false).into()
             }
-        }
-    }
 
-    fn compile_binop(&mut self, op: &BinOpKind, l: BasicValueEnum<'ctx>, r: BasicValueEnum<'ctx>, ty: &Ty) -> BasicValueEnum<'ctx> {
-        if Self::is_integer_ty(ty) || matches!(ty, Ty::Array(_)) {
-            let li = l.into_int_value();
-            let ri = r.into_int_value();
-            let signed = Self::is_signed(ty);
-            match op {
-                BinOpKind::Add => {
-                    if signed && self.debug_mode {
-                        self.emit_overflow_check(li, ri, "sadd", "add")
-                    } else {
-                        self.builder.build_int_add(li, ri, "add").unwrap().into()
+            Expr::EnumVariant { enum_name, variant, value } => {
+                if let Some(st) = self.enum_types.get(enum_name).copied() {
+                    let mut agg = st.get_undef();
+                    let tag = self.enum_variant_tags.get(enum_name)
+                        .and_then(|m| m.get(variant))
+                        .copied()
+                        .unwrap_or(0);
+                    let tag_val = self.context.i32_type().const_int(tag as u64, false);
+                    agg = self.builder.build_insert_value(agg, tag_val, 0, "set_tag")
+                        .unwrap().into_struct_value();
+                    // If the variant has a payload, store it into field 1
+                    if let Some(val_expr) = value {
+                        let payload = self.compile_expr(val_expr, params);
+                        // Alloca the enum struct, store tag, then bitcast field 1 to payload type and store
+                        let alloca = self.build_alloca("enum_tmp", &Ty::Enum(enum_name.clone()));
+                        self.builder.build_store(alloca, agg).unwrap();
+                        let payload_ptr = self.builder
+                            .build_struct_gep(st, alloca, 1, "payload_ptr")
+                            .unwrap();
+                        self.builder.build_store(payload_ptr, payload).unwrap();
+                        return self.builder.build_load(st.as_basic_type_enum(), alloca, "enum_val").unwrap();
                     }
-                }
-                BinOpKind::Sub => {
-                    if signed && self.debug_mode {
-                        self.emit_overflow_check(li, ri, "ssub", "sub")
-                    } else {
-                        self.builder.build_int_sub(li, ri, "sub").unwrap().into()
-                    }
-                }
-                BinOpKind::Mul => {
-                    if signed && self.debug_mode {
-                        self.emit_overflow_check(li, ri, "smul", "mul")
-                    } else {
-                        self.builder.build_int_mul(li, ri, "mul").unwrap().into()
-                    }
-                }
-                BinOpKind::Div => {
-                    let is_zero = self.builder
-                        .build_int_compare(IntPredicate::EQ, ri, ri.get_type().const_zero(), "div_zero")
-                        .unwrap();
-                    let func = self.current_fn.unwrap();
-                    let ok_bb = self.context.append_basic_block(func, "div_ok");
-                    let err_bb = self.context.append_basic_block(func, "div_err");
-                    self.builder.build_conditional_branch(is_zero, err_bb, ok_bb).unwrap();
-
-                    self.builder.position_at_end(err_bb);
-                    let printf = self.module.get_function("printf").unwrap();
-                    let fmt = self.global_string_ptr("runtime error: division by zero\\n", "div_zero_msg");
-                    self.builder.build_call(printf, &[fmt.into()], "").unwrap();
-                    // M04: Kill 복구 블록이 있으면 분기, 없으면 exit
-                    if let Some(recovery_bb) = self.recovery_stack.last().copied() {
-                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
-                    } else {
-                        let exit_fn = self.module.get_function("exit").unwrap();
-                        self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
-                        self.builder.build_unreachable().unwrap();
-                    }
-
-                    self.builder.position_at_end(ok_bb);
-                    if signed {
-                        self.builder.build_int_signed_div(li, ri, "sdiv").unwrap().into()
-                    } else {
-                        self.builder.build_int_unsigned_div(li, ri, "udiv").unwrap().into()
-                    }
-                }
-                BinOpKind::Mod => {
-                    let is_zero = self.builder
-                        .build_int_compare(IntPredicate::EQ, ri, ri.get_type().const_zero(), "mod_zero")
-                        .unwrap();
-                    let func = self.current_fn.unwrap();
-                    let ok_bb = self.context.append_basic_block(func, "mod_ok");
-                    let err_bb = self.context.append_basic_block(func, "mod_err");
-                    self.builder.build_conditional_branch(is_zero, err_bb, ok_bb).unwrap();
-
-                    self.builder.position_at_end(err_bb);
-                    let printf = self.module.get_function("printf").unwrap();
-                    let fmt = self.global_string_ptr("runtime error: modulo by zero\\n", "mod_zero_msg");
-                    self.builder.build_call(printf, &[fmt.into()], "").unwrap();
-                    // M04: Kill 복구 블록이 있으면 분기, 없으면 exit
-                    if let Some(recovery_bb) = self.recovery_stack.last().copied() {
-                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
-                    } else {
-                        let exit_fn = self.module.get_function("exit").unwrap();
-                        self.builder.build_call(exit_fn, &[self.context.i32_type().const_int(1, false).into()], "").unwrap();
-                        self.builder.build_unreachable().unwrap();
-                    }
-
-                    self.builder.position_at_end(ok_bb);
-                    if signed {
-                        self.builder.build_int_signed_rem(li, ri, "srem").unwrap().into()
-                    } else {
-                        self.builder.build_int_unsigned_rem(li, ri, "urem").unwrap().into()
-                    }
-                }
-                BinOpKind::Lt => {
-                    let pred = if signed { IntPredicate::SLT } else { IntPredicate::ULT };
-                    self.builder.build_int_compare(pred, li, ri, "lt").unwrap().into()
-                }
-                BinOpKind::Gt => {
-                    let pred = if signed { IntPredicate::SGT } else { IntPredicate::UGT };
-                    self.builder.build_int_compare(pred, li, ri, "gt").unwrap().into()
-                }
-                BinOpKind::Le => {
-                    let pred = if signed { IntPredicate::SLE } else { IntPredicate::ULE };
-                    self.builder.build_int_compare(pred, li, ri, "le").unwrap().into()
-                }
-                BinOpKind::Ge => {
-                    let pred = if signed { IntPredicate::SGE } else { IntPredicate::UGE };
-                    self.builder.build_int_compare(pred, li, ri, "ge").unwrap().into()
-                }
-                BinOpKind::Eq  => self.builder.build_int_compare(IntPredicate::EQ, li, ri, "eq").unwrap().into(),
-                BinOpKind::Neq => self.builder.build_int_compare(IntPredicate::NE, li, ri, "ne").unwrap().into(),
-                BinOpKind::And => self.builder.build_and(li, ri, "and").unwrap().into(),
-                BinOpKind::Or  => self.builder.build_or(li, ri, "or").unwrap().into(),
-            }
-        } else {
-            match ty {
-                Ty::Float => {
-                    let lf = l.into_float_value();
-                    let rf = r.into_float_value();
-                    match op {
-                        BinOpKind::Add => self.builder.build_float_add(lf, rf, "fadd").unwrap().into(),
-                        BinOpKind::Sub => self.builder.build_float_sub(lf, rf, "fsub").unwrap().into(),
-                        BinOpKind::Mul => self.builder.build_float_mul(lf, rf, "fmul").unwrap().into(),
-                        BinOpKind::Div => self.builder.build_float_div(lf, rf, "fdiv").unwrap().into(),
-                        BinOpKind::Mod => self.builder.build_float_rem(lf, rf, "fmod").unwrap().into(),
-                        BinOpKind::Lt  => self.builder.build_float_compare(FloatPredicate::OLT, lf, rf, "flt").unwrap().into(),
-                        BinOpKind::Gt  => self.builder.build_float_compare(FloatPredicate::OGT, lf, rf, "fgt").unwrap().into(),
-                        BinOpKind::Le  => self.builder.build_float_compare(FloatPredicate::OLE, lf, rf, "fle").unwrap().into(),
-                        BinOpKind::Ge  => self.builder.build_float_compare(FloatPredicate::OGE, lf, rf, "fge").unwrap().into(),
-                        BinOpKind::Eq  => self.builder.build_float_compare(FloatPredicate::OEQ, lf, rf, "feq").unwrap().into(),
-                        BinOpKind::Neq => self.builder.build_float_compare(FloatPredicate::ONE, lf, rf, "fne").unwrap().into(),
-                        _ => l,
-                    }
-                }
-                Ty::Bool => {
-                let li = l.into_int_value();
-                let ri = r.into_int_value();
-                match op {
-                    BinOpKind::And => self.builder.build_and(li, ri, "band").unwrap().into(),
-                    BinOpKind::Or  => self.builder.build_or(li, ri, "bor").unwrap().into(),
-                    BinOpKind::Eq  => self.builder.build_int_compare(IntPredicate::EQ, li, ri, "beq").unwrap().into(),
-                    BinOpKind::Neq => self.builder.build_int_compare(IntPredicate::NE, li, ri, "bne").unwrap().into(),
-                    _ => l,
-                }
-            }
-            Ty::String => {
-                // string 비교 (strcmp)
-                let lp = l.into_pointer_value();
-                let rp = r.into_pointer_value();
-                let strcmp = self.module.get_function("strcmp").unwrap();
-                let cmp_result = self.builder.build_call(strcmp, &[lp.into(), rp.into()], "strcmp_ret")
-                    .unwrap().try_as_basic_value().basic().unwrap().into_int_value();
-                let zero = self.context.i32_type().const_int(0, false);
-                match op {
-                    BinOpKind::Eq  => self.builder.build_int_compare(IntPredicate::EQ, cmp_result, zero, "str_eq").unwrap().into(),
-                    BinOpKind::Neq => self.builder.build_int_compare(IntPredicate::NE, cmp_result, zero, "str_ne").unwrap().into(),
-                    BinOpKind::Lt  => self.builder.build_int_compare(IntPredicate::SLT, cmp_result, zero, "str_lt").unwrap().into(),
-                    BinOpKind::Gt  => self.builder.build_int_compare(IntPredicate::SGT, cmp_result, zero, "str_gt").unwrap().into(),
-                    BinOpKind::Le  => self.builder.build_int_compare(IntPredicate::SLE, cmp_result, zero, "str_le").unwrap().into(),
-                    BinOpKind::Ge  => self.builder.build_int_compare(IntPredicate::SGE, cmp_result, zero, "str_ge").unwrap().into(),
-                    _ => l,
-                }
-            }
-            _ => l,
-            }
-        }
-    }
-
-    // ── 타입 추론 (codegen 시점, 간단 버전) ──
-
-    /// 문자열 연결: 비문자열 피연산자를 문자열로 변환 후 연결
-    fn build_str_concat(
-        &mut self,
-        l: BasicValueEnum<'ctx>,
-        r: BasicValueEnum<'ctx>,
-        lty: &Ty,
-        rty: &Ty,
-        _params: &[Param],
-    ) -> BasicValueEnum<'ctx> {
-        let strlen = self.module.get_function("strlen").unwrap();
-        let malloc = self.module.get_function("malloc").unwrap();
-        let snprintf = self.module.get_function("snprintf").unwrap();
-
-        // 비문자열 피연산자를 문자열로 변환
-        let lp = self.to_string_ptr(l, lty);
-        let rp = self.to_string_ptr(r, rty);
-
-        let len_l = self.builder.build_call(strlen, &[lp.into()], "len_l")
-            .unwrap().try_as_basic_value().basic().unwrap().into_int_value();
-        let len_r = self.builder.build_call(strlen, &[rp.into()], "len_r")
-            .unwrap().try_as_basic_value().basic().unwrap().into_int_value();
-        let total = self.builder.build_int_add(len_l, len_r, "total_len").unwrap();
-        let total_plus1 = self.builder.build_int_add(
-            total, self.i64_type().const_int(1, false), "buf_size"
-        ).unwrap();
-
-        let buf = self.builder.build_call(malloc, &[total_plus1.into()], "concat_buf")
-            .unwrap().try_as_basic_value().basic().unwrap().into_pointer_value();
-
-        // NULL 체크 (C03)
-        self.emit_null_check(buf, "string_concat");
-
-        // M05: 임시 문자열 버퍼 등록 (scope cleanup 시 해제)
-        if let Some(top) = self.string_temp_stack.last_mut() {
-            top.push(buf);
-        }
-
-        let fmt = self.global_string_ptr("%s%s", "concat_fmt");
-        self.builder.build_call(
-            snprintf,
-            &[buf.into(), total_plus1.into(), fmt.into(), lp.into(), rp.into()],
-            "",
-        ).unwrap();
-
-        buf.into()
-    }
-
-    /// 값을 문자열 포인터로 변환 (string이면 그대로, 아니면 snprintf로 변환)
-    fn to_string_ptr(&mut self, val: BasicValueEnum<'ctx>, ty: &Ty) -> PointerValue<'ctx> {
-        if *ty == Ty::String {
-            return val.into_pointer_value();
-        }
-        let malloc = self.module.get_function("malloc").unwrap();
-        let snprintf = self.module.get_function("snprintf").unwrap();
-
-        // 2-pass snprintf: 첫 번째 pass로 필요한 크기 측정
-        let null_ptr = self.ptr_type().const_null();
-        let zero_size = self.i64_type().const_int(0, false);
-
-        let (fmt_ptr, fmt_args): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum<'ctx>>) = match ty {
-            Ty::Float => {
-                let fmt = self.global_string_ptr("%f", "fmt_f2s");
-                (fmt, vec![val.into()])
-            }
-            Ty::Bool => {
-                let true_str  = self.global_string_ptr("true", "s_true");
-                let false_str = self.global_string_ptr("false", "s_false");
-                let selected = self.builder.build_select(
-                    val.into_int_value(),
-                    true_str,
-                    false_str,
-                    "sel",
-                ).unwrap();
-                let fmt = self.global_string_ptr("%s", "fmt_b2s");
-                (fmt, vec![selected.into()])
-            }
-            _ => {
-                // 정수 타입
-                let iv = val.into_int_value();
-                let is_unsigned = matches!(ty, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64);
-                let print_val = if iv.get_type().get_bit_width() < 64 {
-                    if is_unsigned {
-                        self.builder.build_int_z_extend(iv, self.i64_type(), "ext").unwrap()
-                    } else {
-                        self.builder.build_int_s_extend(iv, self.i64_type(), "ext").unwrap()
-                    }
+                    agg.into()
                 } else {
-                    iv
+                    self.i64_type().const_int(0, false).into()
+                }
+            }
+            Expr::Closure { params: cl_params, body } => {
+                // 클로저를 실제 LLVM 함수로 emit (캡처 없는 함수 포인터)
+                let id = self.closure_counter;
+                self.closure_counter += 1;
+                let cl_name = format!("__closure_{}", id);
+
+                // 파라미터 타입 결정
+                let param_tys: Vec<BasicMetadataTypeEnum> = cl_params.iter().map(|(_, opt_ty)| {
+                    let ty = opt_ty.as_ref().cloned().unwrap_or(Ty::Int);
+                    self.ty_to_basic(&ty).into()
+                }).collect();
+                let fn_type = self.i64_type().fn_type(&param_tys, false);
+                let cl_fn = self.module.add_function(&cl_name, fn_type, None);
+                self.functions.insert(cl_name.clone(), cl_fn);
+                self.fn_return_tys.insert(cl_name.clone(), Some(Ty::Int));
+
+                // 현재 상태 저장
+                let saved_fn = self.current_fn;
+                let saved_vars = self.variables.clone();
+                let saved_var_types = self.var_types.clone();
+                let saved_bb = self.builder.get_insert_block();
+
+                // 클로저 함수 본문 빌드
+                let entry_bb = self.context.append_basic_block(cl_fn, "entry");
+                self.builder.position_at_end(entry_bb);
+                self.current_fn = Some(cl_fn);
+                self.variables = HashMap::new();
+                self.var_types = HashMap::new();
+
+                for (i, (param_name, opt_ty)) in cl_params.iter().enumerate() {
+                    let ty = opt_ty.as_ref().cloned().unwrap_or(Ty::Int);
+                    let alloca = self.build_alloca(param_name, &ty);
+                    let pval = cl_fn.get_nth_param(i as u32).unwrap();
+                    self.builder.build_store(alloca, pval).unwrap();
+                    self.variables.insert(param_name.clone(), alloca);
+                    self.var_types.insert(param_name.clone(), ty);
+                }
+
+                self.compile_stmts(body, &[]);
+
+                if self.no_terminator() {
+                    self.builder.build_return(Some(&self.i64_type().const_int(0, false))).unwrap();
+                }
+
+                // 상태 복원
+                self.current_fn = saved_fn;
+                self.variables = saved_vars;
+                self.var_types = saved_var_types;
+                if let Some(bb) = saved_bb {
+                    self.builder.position_at_end(bb);
+                }
+
+                // 함수 포인터 반환
+                cl_fn.as_global_value().as_pointer_value().into()
+            }
+            Expr::FStringLit(parts) => {
+                // f-string: snprintf를 이용해 각 파트를 버퍼에 누적
+                let buf_size = 4096u64;
+                // i8 타입으로 배열 alloca (포인터로 바로 사용)
+                let i8_ty = self.context.i8_type();
+                let alloca = self.builder.build_array_alloca(i8_ty, self.i64_type().const_int(buf_size, false), "fstr_buf").unwrap();
+                // buf[0] = '\0'
+                let zero_i8 = i8_ty.const_zero();
+                self.builder.build_store(alloca, zero_i8).unwrap();
+
+                let strcat_fn = if let Some(f) = self.module.get_function("strcat") { f } else {
+                    let i8_ptr = self.ptr_type();
+                    let fn_ty = i8_ptr.fn_type(&[i8_ptr.into(), i8_ptr.into()], false);
+                    self.module.add_function("strcat", fn_ty, None)
                 };
-                let fmt_str = if is_unsigned { "%llu" } else { "%lld" };
-                let fmt = self.global_string_ptr(fmt_str, "fmt_i2s");
-                (fmt, vec![print_val.into()])
-            }
-        };
+                let snprintf_fn = if let Some(f) = self.module.get_function("snprintf") { f } else {
+                    let i8_ptr = self.ptr_type();
+                    let i64_ty = self.i64_type();
+                    let fn_ty = i64_ty.fn_type(&[i8_ptr.into(), i64_ty.into(), i8_ptr.into()], true);
+                    self.module.add_function("snprintf", fn_ty, None)
+                };
 
-        // pass 1: snprintf(NULL, 0, fmt, ...) → 반환값 = 필요한 문자 수
-        let mut pass1_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![null_ptr.into(), zero_size.into(), fmt_ptr.into()];
-        pass1_args.extend(fmt_args.iter().cloned());
-        let needed = self.builder.build_call(snprintf, &pass1_args, "snprintf_len")
-            .unwrap().try_as_basic_value().basic().unwrap().into_int_value();
-        // needed는 i32, 확장 → i64
-        let needed_i64 = self.builder.build_int_s_extend(needed, self.i64_type(), "needed_i64").unwrap();
-        let buf_size = self.builder.build_int_add(
-            needed_i64, self.i64_type().const_int(1, false), "buf_size"
-        ).unwrap();
-
-        // malloc
-        let buf = self.builder.build_call(malloc, &[buf_size.into()], "conv_buf")
-            .unwrap().try_as_basic_value().basic().unwrap().into_pointer_value();
-
-        // NULL 체크
-        self.emit_null_check(buf, "to_string_ptr");
-
-        // M05: 임시 문자열 변환 버퍼 등록
-        if let Some(top) = self.string_temp_stack.last_mut() {
-            top.push(buf);
-        }
-
-        // pass 2: snprintf(buf, buf_size, fmt, ...)
-        let mut pass2_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![buf.into(), buf_size.into(), fmt_ptr.into()];
-        pass2_args.extend(fmt_args.iter().cloned());
-        self.builder.build_call(snprintf, &pass2_args, "").unwrap();
-
-        buf
-    }
-
-    /// 타입 캐스팅 (as)
-    fn build_cast(&self, val: BasicValueEnum<'ctx>, src: &Ty, dst: &Ty) -> BasicValueEnum<'ctx> {
-        match (src, dst) {
-            // same type
-            (s, d) if s == d => val,
-            // int → float
-            (s, Ty::Float) if Self::is_integer_ty(s) => {
-                let iv = val.into_int_value();
-                if Self::is_signed(s) {
-                    self.builder.build_signed_int_to_float(iv, self.f64_type(), "si2f").unwrap().into()
-                } else {
-                    self.builder.build_unsigned_int_to_float(iv, self.f64_type(), "ui2f").unwrap().into()
+                for part in parts {
+                    match part {
+                        crate::ast::FStringPart::Literal(s) => {
+                            let lit_ptr = self.global_string_ptr(s, "fstr_lit");
+                            self.builder.build_call(strcat_fn, &[alloca.into(), lit_ptr.into()], "").unwrap();
+                        }
+                        crate::ast::FStringPart::Expr(e) => {
+                            let val = self.compile_expr(e, params);
+                            let expr_ty = self.guess_expr_ty(e, params);
+                            let tmp = self.builder.build_array_alloca(i8_ty, self.i64_type().const_int(64, false), "fstr_tmp").unwrap();
+                            let fmt = match &expr_ty {
+                                Ty::Float => self.global_string_ptr("%g", "fmt_g"),
+                                Ty::Bool | Ty::String => self.global_string_ptr("%s", "fmt_s"),
+                                _ => self.global_string_ptr("%lld", "fmt_lld"),
+                            };
+                            let val_arg: inkwell::values::BasicMetadataValueEnum = match &expr_ty {
+                                Ty::Float => val.into(),
+                                Ty::Bool => {
+                                    let bv = val.into_int_value();
+                                    let true_str = self.global_string_ptr("true", "s_true2");
+                                    let false_str = self.global_string_ptr("false", "s_false2");
+                                    self.builder.build_select(bv, true_str, false_str, "boolstr").unwrap().into()
+                                }
+                                Ty::String => val.into(),
+                                _ => {
+                                    let iv = val.into_int_value();
+                                    self.builder.build_int_s_extend_or_bit_cast(iv, self.i64_type(), "ext").unwrap().into()
+                                }
+                            };
+                            self.builder.build_call(snprintf_fn, &[tmp.into(), self.i64_type().const_int(64, false).into(), fmt.into(), val_arg], "").unwrap();
+                            self.builder.build_call(strcat_fn, &[alloca.into(), tmp.into()], "").unwrap();
+                        }
+                    }
                 }
+                // 스택 버퍼를 직접 반환 (GC 없이 함수 수명 동안 유효)
+                alloca.into()
             }
-            // float → int
-            (Ty::Float, d) if Self::is_integer_ty(d) => {
-                let fv = val.into_float_value();
-                let target_ty = self.ty_to_int_type(d);
-                if Self::is_signed(d) {
-                    self.builder.build_float_to_signed_int(fv, target_ty, "f2si").unwrap().into()
-                } else {
-                    self.builder.build_float_to_unsigned_int(fv, target_ty, "f2ui").unwrap().into()
-                }
-            }
-            // int → int (truncate/extend)
-            (s, d) if Self::is_integer_ty(s) && Self::is_integer_ty(d) => {
-                self.coerce_to_ty(val, d)
-            }
-            // bool → int
-            (Ty::Bool, d) if Self::is_integer_ty(d) => {
-                let iv = val.into_int_value();
-                let target_ty = self.ty_to_int_type(d);
-                self.builder.build_int_z_extend(iv, target_ty, "b2i").unwrap().into()
-            }
-            // int → bool
-            (s, Ty::Bool) if Self::is_integer_ty(s) => {
-                let iv = val.into_int_value();
-                let zero = iv.get_type().const_int(0, false);
-                self.builder.build_int_compare(IntPredicate::NE, iv, zero, "i2b").unwrap().into()
-            }
-            _ => val,
         }
     }
 
@@ -1984,6 +2111,9 @@ impl<'ctx> Codegen<'ctx> {
                     Ty::Int
                 }
             }
+            Expr::EnumVariant { enum_name, .. } => Ty::Enum(enum_name.clone()),
+            Expr::Closure { .. } => Ty::Fn(vec![], None),
+            Expr::FStringLit(_) => Ty::String,
         }
     }
 
@@ -1997,28 +2127,42 @@ impl<'ctx> Codegen<'ctx> {
         println!("{}", self.module.print_to_string().to_string());
     }
 
-    pub fn write_object_file(&self, path: &str) {
-        Target::initialize_native(&InitializationConfig::default())
-            .expect("Failed to initialize native target");
+    pub fn run_i64_function(&self, name: &str) -> Result<i64, String> {
+        let func = self
+            .module
+            .get_function(name)
+            .ok_or_else(|| format!("function '{}' not found", name))?;
 
-        let triple = TargetMachine::get_default_triple();
-        let target = Target::from_triple(&triple).expect("Failed to get target");
-        let machine = target.create_target_machine(
-            &triple,
-            "generic",
-            "",
-            self.opt_level,
-            RelocMode::Default,
-            CodeModel::Default,
-        ).expect("Failed to create target machine");
+        let engine: ExecutionEngine<'ctx> = self
+            .module
+            .create_jit_execution_engine(self.opt_level)
+            .map_err(|e| format!("failed to create JIT engine: {}", e))?;
 
-        machine.write_to_file(&self.module, FileType::Object, Path::new(path))
-            .expect("Failed to write object file");
-        // TargetMachine Drop 시 LLVM atexit 충돌 방지 — 어차피 safe_exit 예정
-        std::mem::forget(machine);
+        let ret = unsafe { engine.run_function(func, &[]) };
+        let value = ret.as_int(false) as i64;
+        std::mem::forget(engine);
+        Ok(value)
     }
 
-    pub fn write_ir_file(&self, path: &str) {
-        self.module.print_to_file(Path::new(path)).expect("Failed to write IR file");
+    pub fn run_f64_function(&self, name: &str) -> Result<f64, String> {
+        let func = self
+            .module
+            .get_function(name)
+            .ok_or_else(|| format!("function '{}' not found", name))?;
+
+        let engine: ExecutionEngine<'ctx> = self
+            .module
+            .create_jit_execution_engine(self.opt_level)
+            .map_err(|e| format!("failed to create JIT engine: {}", e))?;
+
+        let ret = unsafe { engine.run_function(func, &[]) };
+        let value = ret.as_float(&self.f64_type());
+        std::mem::forget(engine);
+        Ok(value)
     }
+
+    pub fn get_function_return_ty(&self, name: &str) -> Option<Ty> {
+        self.fn_return_tys.get(name).and_then(|opt| opt.clone())
+    }
+
 }

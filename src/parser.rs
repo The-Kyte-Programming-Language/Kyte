@@ -1,5 +1,11 @@
 use crate::ast::*;
 
+#[path = "parser/fstring.rs"]
+mod fstring;
+use fstring::parse_fstring_parts;
+#[path = "parser/toplevel.rs"]
+mod toplevel;
+
 const MAX_DEPTH: usize = 256;
 
 pub struct Parser {
@@ -9,6 +15,8 @@ pub struct Parser {
     pos:    usize,
     pub errors: Vec<String>,
     depth:  usize,
+    no_struct_init: bool,
+    enum_names: std::collections::HashSet<String>,
 }
 
 impl Parser {
@@ -21,7 +29,7 @@ impl Parser {
             lines.push(line);
             cols.push(col);
         }
-        Parser { tokens, lines, cols, pos: 0, errors: Vec::new(), depth: 0 }
+        Parser { tokens, lines, cols, pos: 0, errors: Vec::new(), depth: 0, no_struct_init: false, enum_names: std::collections::HashSet::new() }
     }
 
     fn is_keyword(name: &str) -> bool {
@@ -32,6 +40,7 @@ impl Parser {
             | "true" | "false" | "free" | "print" | "as" | "struct"
             | "int" | "float" | "string" | "bool" | "auto" | "assert"
             | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+            | "enum" | "match" | "trait" | "impl" | "mod" | "const" | "import"
         )
     }
 
@@ -89,19 +98,26 @@ impl Parser {
             self.advance();
         }
 
-        let name = self.eat_ident();
+        let mut name = self.eat_ident();
 
         if self.current() == &Token::LParen {
             self.advance();
             let mut depth = 1usize;
+            let mut arg_text = String::new();
             while depth > 0 {
                 match self.current() {
                     Token::LParen => {
+                        if depth >= 1 {
+                            arg_text.push('(');
+                        }
                         depth += 1;
                         self.advance();
                     }
                     Token::RParen => {
                         depth -= 1;
+                        if depth > 0 {
+                            arg_text.push(')');
+                        }
                         self.advance();
                     }
                     Token::EOF => {
@@ -112,11 +128,50 @@ impl Parser {
                         ));
                         break;
                     },
+                    Token::Comma => {
+                        arg_text.push(',');
+                        self.advance();
+                    }
+                    Token::Ident(s) => {
+                        arg_text.push_str(s);
+                        self.advance();
+                    }
+                    Token::IntLit(n) => {
+                        arg_text.push_str(&n.to_string());
+                        self.advance();
+                    }
+                    Token::FloatLit(f) => {
+                        arg_text.push_str(&f.to_string());
+                        self.advance();
+                    }
+                    Token::StringLit(s) => {
+                        arg_text.push('"');
+                        arg_text.push_str(s);
+                        arg_text.push('"');
+                        self.advance();
+                    }
+                    Token::True => {
+                        arg_text.push_str("true");
+                        self.advance();
+                    }
+                    Token::False => {
+                        arg_text.push_str("false");
+                        self.advance();
+                    }
+                    Token::Minus => {
+                        arg_text.push('-');
+                        self.advance();
+                    }
+                    Token::Dot => {
+                        arg_text.push('.');
+                        self.advance();
+                    }
                     _ => {
                         self.advance();
                     }
                 }
             }
+            name = format!("{}({})", name, arg_text.trim());
         }
 
         if has_bracket {
@@ -182,6 +237,15 @@ impl Parser {
             Token::TyU16    => { self.advance(); "u16".to_string() }
             Token::TyU32    => { self.advance(); "u32".to_string() }
             Token::TyU64    => { self.advance(); "u64".to_string() }
+            Token::Auto     => { self.advance(); "auto".to_string() }
+            Token::Assert   => { self.advance(); "assert".to_string() }
+            Token::Enum     => { self.advance(); "enum".to_string() }
+            Token::Match    => { self.advance(); "match".to_string() }
+            Token::Trait    => { self.advance(); "trait".to_string() }
+            Token::Impl     => { self.advance(); "impl".to_string() }
+            Token::Mod      => { self.advance(); "mod".to_string() }
+            Token::Const    => { self.advance(); "const".to_string() }
+            Token::Import   => { self.advance(); "import".to_string() }
             t => {
                 self.errors.push(format!(
                     "Expected identifier but got {:?} at line {}:{}",
@@ -196,6 +260,22 @@ impl Parser {
 
     // 타입 파싱
     fn parse_ty(&mut self) -> Ty {
+        // fn(int, bool) -> string  함수 타입
+        if self.current() == &Token::Function {
+            self.advance();
+            self.expect(&Token::LParen);
+            let mut param_tys = Vec::new();
+            while self.current() != &Token::RParen && self.current() != &Token::EOF {
+                param_tys.push(self.parse_ty());
+                if self.current() == &Token::Comma { self.advance(); }
+            }
+            self.expect(&Token::RParen);
+            let ret_ty = if self.current() == &Token::Arrow {
+                self.advance();
+                Some(Box::new(self.parse_ty()))
+            } else { None };
+            return Ty::Fn(param_tys, ret_ty);
+        }
         let base = match self.current().clone() {
             Token::Int    => { self.advance(); Ty::Int }
             Token::Float  => { self.advance(); Ty::Float }
@@ -209,7 +289,14 @@ impl Parser {
             Token::TyU16  => { self.advance(); Ty::U16 }
             Token::TyU32  => { self.advance(); Ty::U32 }
             Token::TyU64  => { self.advance(); Ty::U64 }
-            Token::Ident(name) => { self.advance(); Ty::Struct(name) }
+            Token::Ident(name) => {
+                self.advance();
+                if self.enum_names.contains(&name) {
+                    Ty::Enum(name)
+                } else {
+                    Ty::Struct(name)
+                }
+            }
             t => {
                 self.errors.push(format!(
                     "Expected type but got {:?} at line {}:{}",
@@ -343,7 +430,7 @@ impl Parser {
             Token::False        => { self.advance(); Expr::Bool(false) }
             Token::Ident(s)     => {
                 self.advance();
-                if self.current() == &Token::LBrace {
+                if !self.no_struct_init && self.current() == &Token::LBrace {
                     self.advance();
                     let mut fields = Vec::new();
                     while self.current() != &Token::RBrace {
@@ -391,6 +478,42 @@ impl Parser {
                 self.expect(&Token::RParen);
                 e
             }
+            // 클로저: |x: int, y| { ... } 또는 |x| expr
+            Token::Pipe => {
+                self.advance();
+                let mut closure_params = Vec::new();
+                while self.current() != &Token::Pipe && self.current() != &Token::EOF {
+                    let pname = self.eat_ident();
+                    let ty = if self.current() == &Token::Colon {
+                        self.advance();
+                        Some(self.parse_ty())
+                    } else { None };
+                    closure_params.push((pname, ty));
+                    if self.current() == &Token::Comma { self.advance(); }
+                }
+                self.expect(&Token::Pipe);
+                let body = if self.current() == &Token::LBrace {
+                    self.advance();
+                    let b = self.parse_body();
+                    self.expect(&Token::RBrace);
+                    b
+                } else {
+                    let e = self.parse_expr();
+                    let span = self.current_span();
+                    vec![(Stmt::Return(Some(e)), span)]
+                };
+                Expr::Closure { params: closure_params, body }
+            }
+            // f-string 리터럴 파싱
+            Token::FStringLit(raw) => {
+                let raw = raw.clone();
+                let line = self.current_line();
+                self.advance();
+                let mut tmp_errors = Vec::new();
+                let parts = parse_fstring_parts(&raw, &mut tmp_errors, line);
+                self.errors.extend(tmp_errors);
+                Expr::FStringLit(parts)
+            }
             t => {
                 self.errors.push(format!(
                     "Unexpected token in expression: {:?} at line {}:{}",
@@ -424,6 +547,26 @@ impl Parser {
                 Token::Dot => {
                     self.advance();
                     let member = self.eat_ident();
+                    // Check if base is an enum name → EnumVariant
+                    if let Expr::Ident(ref base_name) = expr {
+                        if self.enum_names.contains(base_name) {
+                            // EnumName.Variant or EnumName.Variant(value)
+                            let value = if self.current() == &Token::LParen {
+                                self.advance();
+                                let v = self.parse_expr();
+                                self.expect(&Token::RParen);
+                                Some(Box::new(v))
+                            } else {
+                                None
+                            };
+                            expr = Expr::EnumVariant {
+                                enum_name: base_name.clone(),
+                                variant: member,
+                                value,
+                            };
+                            continue;
+                        }
+                    }
                     if self.current() == &Token::LParen {
                         self.advance();
                         let mut args = Vec::new();
@@ -444,9 +587,13 @@ impl Parser {
     }
 
     fn parse_ident_stmt(&mut self, name: String) -> Stmt {
-        // 구조체 타입 변수 선언: User u = User { ... };
+        // 구조체/enum 타입 변수 선언: User u = User { ... }; or Color c = Color.Red;
         if let Token::Ident(var_name) = self.current().clone() {
-            let ty = Ty::Struct(name);
+            let ty = if self.enum_names.contains(&name) {
+                Ty::Enum(name)
+            } else {
+                Ty::Struct(name)
+            };
             self.advance();
             self.expect(&Token::Eq);
             let value = self.parse_expr();
@@ -736,6 +883,20 @@ impl Parser {
                 self.expect(&Token::Semicolon);
                 Stmt::VarDecl { ty: Ty::Auto, name, value }
             }
+            // match 문
+            Token::Match => {
+                self.parse_match_stmt()
+            }
+            // const 선언
+            Token::Const => {
+                self.advance();
+                let ty = self.parse_ty();
+                let name = self.eat_var_ident();
+                self.expect(&Token::Eq);
+                let value = self.parse_expr();
+                self.expect(&Token::Semicolon);
+                Stmt::ConstDecl { ty, name, value }
+            }
             Token::Ident(name) => {
                 self.advance();
                 self.parse_ident_stmt(name)
@@ -882,6 +1043,19 @@ impl Parser {
         } else {
             first_name
         };
+
+        // 제네릭 타입 파라미터 파싱: fn foo<T, U>(...)
+        let mut type_params = Vec::new();
+        if self.current() == &Token::Lt {
+            self.advance();
+            while self.current() != &Token::Gt && self.current() != &Token::EOF {
+                let tp = self.eat_ident();
+                type_params.push(tp);
+                if self.current() == &Token::Comma { self.advance(); }
+            }
+            self.expect(&Token::Gt);
+        }
+
         self.expect(&Token::LParen);
 
         let mut params = Vec::new();
@@ -907,7 +1081,7 @@ impl Parser {
         let body = self.parse_body();
         self.expect(&Token::RBrace);
 
-        (TopLevel::Function { name, params, return_ty, body, decorators: Vec::new() }, span)
+        (TopLevel::Function { name, type_params, params, return_ty, body, decorators: Vec::new() }, span)
     }
 
     // struct 선언 파싱
@@ -929,6 +1103,112 @@ impl Parser {
         (TopLevel::Struct { name, fields }, span)
     }
 
+    // enum 선언 파싱
+    fn parse_enum(&mut self) -> (TopLevel, Span) {
+        let span = self.current_span();
+        self.expect(&Token::Enum);
+        let name = self.eat_ident();
+        self.enum_names.insert(name.clone());
+        self.expect(&Token::LBrace);
+
+        let mut variants = Vec::new();
+        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+            let vname = self.eat_ident();
+            let ty = if self.current() == &Token::LParen {
+                self.advance();
+                let t = self.parse_ty();
+                self.expect(&Token::RParen);
+                Some(t)
+            } else {
+                None
+            };
+            variants.push(EnumVariant { name: vname, ty });
+            if self.current() == &Token::Comma { self.advance(); }
+        }
+        self.expect(&Token::RBrace);
+
+        (TopLevel::Enum { name, variants }, span)
+    }
+
+    // match 표현식 파싱: match expr { pattern => { body }, ... }
+    fn parse_match_stmt(&mut self) -> Stmt {
+        self.expect(&Token::Match);
+        self.no_struct_init = true;
+        let expr = self.parse_expr();
+        self.no_struct_init = false;
+        self.expect(&Token::LBrace);
+
+        let mut arms = Vec::new();
+        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+            let pattern = self.parse_pattern();
+            self.expect(&Token::FatArrow);
+            self.expect(&Token::LBrace);
+            let body = self.parse_body();
+            self.expect(&Token::RBrace);
+            arms.push(MatchArm { pattern, body });
+            // optional trailing comma
+            if self.current() == &Token::Comma { self.advance(); }
+        }
+        self.expect(&Token::RBrace);
+
+        Stmt::Match { expr, arms }
+    }
+
+    // 패턴 파싱
+    fn parse_pattern(&mut self) -> Pattern {
+        match self.current().clone() {
+            Token::IntLit(n) => { self.advance(); Pattern::IntLit(n) }
+            Token::FloatLit(f) => { self.advance(); Pattern::FloatLit(f) }
+            Token::StringLit(s) => { self.advance(); Pattern::StringLit(s) }
+            Token::True  => { self.advance(); Pattern::Bool(true) }
+            Token::False => { self.advance(); Pattern::Bool(false) }
+            Token::Minus => {
+                // 음수 리터럴: -42
+                self.advance();
+                if let Token::IntLit(n) = self.current().clone() {
+                    self.advance();
+                    Pattern::IntLit(-n)
+                } else {
+                    self.errors.push(format!(
+                        "Expected integer after '-' in pattern at line {}:{}",
+                        self.current_line(), self.current_col()
+                    ));
+                    Pattern::Wildcard
+                }
+            }
+            Token::Ident(name) => {
+                self.advance();
+                if name == "_" {
+                    Pattern::Wildcard
+                } else if self.current() == &Token::Dot {
+                    // EnumName.Variant or EnumName.Variant(binding)
+                    self.advance();
+                    let variant = self.eat_ident();
+                    let binding = if self.current() == &Token::LParen {
+                        self.advance();
+                        let b = self.eat_var_ident();
+                        self.expect(&Token::RParen);
+                        Some(b)
+                    } else {
+                        None
+                    };
+                    Pattern::EnumVariant { enum_name: name, variant, binding }
+                } else {
+                    // wildcard: _ 또는 그냥 identifier (사용 안 함 — wildcard 취급)
+                    Pattern::Wildcard
+                }
+            }
+            _ => {
+                self.errors.push(format!(
+                    "Expected pattern at line {}:{}",
+                    self.current_line(), self.current_col()
+                ));
+                self.advance();
+                Pattern::Wildcard
+            }
+        }
+    }
+
     // 전체 파싱
     pub fn parse(&mut self) -> Program {
         let mut items = Vec::new();
@@ -936,16 +1216,15 @@ impl Parser {
             match self.current() {
                 Token::EOF      => break,
                 Token::Hash     => {
-                    // A10: decorator 수집 → 이어서 fn에 부착
-                    let dec_name = self.parse_decorator();
-                    if self.current() == &Token::Hash {
-                        // 연속 decorator — skip (이미 파싱됨)
-                        // TODO: 여러 개 decorator 지원
+                    // A10: 연속 decorator 수집 → 이어서 fn에 부착
+                    let mut dec_names = Vec::new();
+                    while self.current() == &Token::Hash {
+                        dec_names.push(self.parse_decorator());
                     }
                     if self.current() == &Token::Function {
                         let (mut tl, sp) = self.parse_function();
                         if let TopLevel::Function { ref mut decorators, .. } = tl {
-                            decorators.push(dec_name);
+                            decorators.extend(dec_names);
                         }
                         items.push((tl, sp));
                     }
@@ -954,6 +1233,21 @@ impl Parser {
                 Token::At       => items.push(self.parse_anchor()),
                 Token::Function => items.push(self.parse_function()),
                 Token::Struct   => items.push(self.parse_struct()),
+                Token::Enum     => items.push(self.parse_enum()),
+                Token::Trait    => items.push(self.parse_trait()),
+                Token::Impl     => items.push(self.parse_impl()),
+                Token::Mod      => items.push(self.parse_mod()),
+                Token::Import   => { self.advance(); /* import는 현재 무시 */ }
+                Token::Const    => {
+                    let span = self.current_span();
+                    self.advance();
+                    let ty = self.parse_ty();
+                    let name = self.eat_var_ident();
+                    self.expect(&Token::Eq);
+                    let value = self.parse_expr();
+                    self.expect(&Token::Semicolon);
+                    items.push((TopLevel::ConstDecl { ty, name, value }, span));
+                }
                 t => {
                     self.errors.push(format!(
                         "Unexpected top-level token: {:?} at line {}:{}",
@@ -968,3 +1262,4 @@ impl Parser {
         Program { items }
     }
 }
+

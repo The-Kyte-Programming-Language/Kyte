@@ -27,6 +27,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             trigger_characters: Some(vec![".".into(), "@".into()]),
             ..Default::default()
         }),
+        definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".into(), ",".into()]),
+            ..Default::default()
+        }),
         ..Default::default()
     })?;
 
@@ -124,6 +132,51 @@ fn dispatch_request(
             let list = compute_completions(docs.get(uri).map(|s: &String| s.as_str()));
             conn.sender.send(Message::Response(
                 Response::new_ok(req.id.clone(), list),
+            ))?;
+        }
+        "textDocument/definition" => {
+            let p: GotoDefinitionParams = serde_json::from_value(req.params.clone())?;
+            let uri = &p.text_document_position_params.text_document.uri;
+            let pos = p.text_document_position_params.position;
+            let result = docs.get(uri).and_then(|t| compute_definition(t, pos, uri));
+            conn.sender.send(Message::Response(
+                Response::new_ok(req.id.clone(), result),
+            ))?;
+        }
+        "textDocument/references" => {
+            let p: ReferenceParams = serde_json::from_value(req.params.clone())?;
+            let uri = &p.text_document_position.text_document.uri;
+            let pos = p.text_document_position.position;
+            let result = docs.get(uri).map(|t| compute_references(t, pos, uri));
+            conn.sender.send(Message::Response(
+                Response::new_ok(req.id.clone(), result),
+            ))?;
+        }
+        "textDocument/rename" => {
+            let p: RenameParams = serde_json::from_value(req.params.clone())?;
+            let uri = &p.text_document_position.text_document.uri;
+            let pos = p.text_document_position.position;
+            let new_name = &p.new_name;
+            let result = docs.get(uri).and_then(|t| compute_rename(t, pos, uri, new_name));
+            conn.sender.send(Message::Response(
+                Response::new_ok(req.id.clone(), result),
+            ))?;
+        }
+        "textDocument/documentSymbol" => {
+            let p: DocumentSymbolParams = serde_json::from_value(req.params.clone())?;
+            let uri = &p.text_document.uri;
+            let result = docs.get(uri).map(|t| compute_document_symbols(t, uri));
+            conn.sender.send(Message::Response(
+                Response::new_ok(req.id.clone(), result),
+            ))?;
+        }
+        "textDocument/signatureHelp" => {
+            let p: SignatureHelpParams = serde_json::from_value(req.params.clone())?;
+            let uri = &p.text_document_position_params.text_document.uri;
+            let pos = p.text_document_position_params.position;
+            let result = docs.get(uri).and_then(|t| compute_signature_help(t, pos));
+            conn.sender.send(Message::Response(
+                Response::new_ok(req.id.clone(), result),
             ))?;
         }
         _ => {
@@ -316,6 +369,24 @@ fn compute_hover(text: &str, pos: Position) -> Option<Hover> {
 
 fn keyword_hover(w: &str) -> Option<String> {
     let s = match w {
+        "enum" => "\
+**enum** — enum type declaration\n\n\
+```kyte\n\
+enum Color {\n\
+    Red,\n\
+    Green,\n\
+    Blue,\n\
+}\n\
+```",
+        "match" => "\
+**match** — pattern matching\n\n\
+```kyte\n\
+match color {\n\
+    Color.Red => { print(\"red\"); }\n\
+    Color.Green => { print(\"green\"); }\n\
+    _ => { print(\"other\"); }\n\
+}\n\
+```",
         "int" => "\
 **int** — 64-bit signed integer type\n\n\
 ```kyte\n\
@@ -549,6 +620,138 @@ fn search_children(src: &str, children: &[(TopLevel, crate::ast::Span)], word: &
     None
 }
 
+// ────────────────────────────────────────────────────────────
+//  Go-to-Definition
+// ────────────────────────────────────────────────────────────
+
+fn compute_definition(text: &str, pos: Position, uri: &Uri) -> Option<GotoDefinitionResponse> {
+    let word = word_at(text, pos)?;
+    let src = preprocess_source(text);
+    let r = catch_unwind(AssertUnwindSafe(|| -> Option<Location> {
+        let mut lex = Lexer::new(&src);
+        let tokens = lex.tokenize();
+        let mut par = Parser::new(tokens);
+        let ast = par.parse();
+
+        for (item, span) in &ast.items {
+            let found = match item {
+                TopLevel::Function { name, .. } if *name == word => true,
+                TopLevel::Struct { name, .. } if *name == word => true,
+                TopLevel::Enum { name, .. } if *name == word => true,
+                TopLevel::Anchor { name, .. } if *name == word => true,
+                _ => false,
+            };
+            if found {
+                let line = span.line.saturating_sub(1) as u32;
+                return Some(Location {
+                    uri: uri.clone(),
+                    range: Range {
+                        start: Position { line, character: 0 },
+                        end: Position { line, character: word.len() as u32 + 10 },
+                    },
+                });
+            }
+            // search nested anchors
+            if let TopLevel::Anchor { children, .. } = item {
+                if let Some(loc) = find_def_in_children(children, &word, uri) {
+                    return Some(loc);
+                }
+            }
+        }
+        None
+    }));
+    r.ok().flatten().map(GotoDefinitionResponse::Scalar)
+}
+
+fn find_def_in_children(children: &[(TopLevel, crate::ast::Span)], word: &str, uri: &Uri) -> Option<Location> {
+    for (item, span) in children {
+        let found = match item {
+            TopLevel::Function { name, .. } if name == word => true,
+            TopLevel::Struct { name, .. } if name == word => true,
+            TopLevel::Enum { name, .. } if name == word => true,
+            TopLevel::Anchor { name, .. } if name == word => true,
+            _ => false,
+        };
+        if found {
+            let line = span.line.saturating_sub(1) as u32;
+            return Some(Location {
+                uri: uri.clone(),
+                range: Range {
+                    start: Position { line, character: 0 },
+                    end: Position { line, character: word.len() as u32 + 10 },
+                },
+            });
+        }
+        if let TopLevel::Anchor { children: nested, .. } = item {
+            if let Some(loc) = find_def_in_children(nested, word, uri) {
+                return Some(loc);
+            }
+        }
+    }
+    None
+}
+
+// ────────────────────────────────────────────────────────────
+//  Find References
+// ────────────────────────────────────────────────────────────
+
+fn compute_references(text: &str, pos: Position, uri: &Uri) -> Vec<Location> {
+    let word = match word_at(text, pos) {
+        Some(w) => w,
+        None => return vec![],
+    };
+    // Simple text-based search: find all occurrences of the word as a whole word
+    let mut refs = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        let mut col = 0usize;
+        let hay = line;
+        while let Some(offset) = hay[col..].find(&word) {
+            let abs = col + offset;
+            // Ensure it's a whole word
+            let before_ok = abs == 0 || {
+                let c = hay.as_bytes()[abs - 1];
+                !(c.is_ascii_alphanumeric() || c == b'_')
+            };
+            let after_pos = abs + word.len();
+            let after_ok = after_pos >= hay.len() || {
+                let c = hay.as_bytes()[after_pos];
+                !(c.is_ascii_alphanumeric() || c == b'_')
+            };
+            if before_ok && after_ok {
+                refs.push(Location {
+                    uri: uri.clone(),
+                    range: Range {
+                        start: Position { line: line_idx as u32, character: abs as u32 },
+                        end: Position { line: line_idx as u32, character: after_pos as u32 },
+                    },
+                });
+            }
+            col = abs + word.len().max(1);
+        }
+    }
+    refs
+}
+
+/// Extract the word under the cursor
+fn word_at(text: &str, pos: Position) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let line = lines.get(pos.line as usize)?;
+    let chars: Vec<char> = line.chars().collect();
+    let col = pos.character as usize;
+    if col >= chars.len() || !(chars[col].is_alphanumeric() || chars[col] == '_') {
+        return None;
+    }
+    let mut lo = col;
+    while lo > 0 && (chars[lo - 1].is_alphanumeric() || chars[lo - 1] == '_') {
+        lo -= 1;
+    }
+    let mut hi = col;
+    while hi < chars.len() && (chars[hi].is_alphanumeric() || chars[hi] == '_') {
+        hi += 1;
+    }
+    Some(chars[lo..hi].iter().collect())
+}
+
 fn format_with_doc(sig: &str, doc: &str) -> String {
     if doc.is_empty() {
         sig.to_string()
@@ -649,6 +852,13 @@ fn ty_str(ty: &Ty) -> String {
         Ty::Array(inner) => format!("{}[]", ty_str(inner)),
         Ty::Struct(name) => name.clone(),
         Ty::Auto => "auto".to_string(),
+        Ty::Enum(name) => name.clone(),
+        Ty::TypeParam(name) => name.clone(),
+        Ty::Fn(params, ret) => {
+            let ps: Vec<String> = params.iter().map(ty_str).collect();
+            let ret_s = ret.as_deref().map(ty_str).unwrap_or_else(|| "void".to_string());
+            format!("fn({}) -> {}", ps.join(", "), ret_s)
+        }
     }
 }
 
@@ -736,4 +946,164 @@ const KEYWORDS: &[(&str, CompletionItemKind, &str)] = &[
     ("false",  CompletionItemKind::CONSTANT,       "Boolean false"),
     ("auto",   CompletionItemKind::KEYWORD,        "Type inference: auto x = expr;"),
     ("assert", CompletionItemKind::FUNCTION,       "Assert condition: assert(cond);"),
+    ("enum",   CompletionItemKind::KEYWORD,        "Enum type declaration"),
+    ("match",  CompletionItemKind::KEYWORD,        "Pattern matching: match expr { pat => { ... } }"),
+    ("trait",  CompletionItemKind::KEYWORD,        "Trait declaration"),
+    ("impl",   CompletionItemKind::KEYWORD,        "Trait implementation block"),
+    ("mod",    CompletionItemKind::KEYWORD,        "Module/namespace declaration"),
+    ("const",  CompletionItemKind::KEYWORD,        "Immutable constant variable"),
 ];
+
+// ────────────────────────────────────────────────────────────
+//  Rename (textDocument/rename)
+// ────────────────────────────────────────────────────────────
+
+fn compute_rename(text: &str, pos: Position, uri: &Uri, new_name: &str) -> Option<WorkspaceEdit> {
+    // 커서 위치에 단어 있는지 확인
+    word_at(text, pos)?;
+    // 모든 참조를 찾아 new_name으로 교체
+    let refs = compute_references(text, pos, uri);
+    if refs.is_empty() { return None; }
+    let edits: Vec<TextEdit> = refs.into_iter().map(|loc| TextEdit {
+        range: loc.range,
+        new_text: new_name.to_string(),
+    }).collect();
+    let mut changes = HashMap::new();
+    changes.insert(uri.clone(), edits);
+    Some(WorkspaceEdit { changes: Some(changes), ..Default::default() })
+}
+
+// ────────────────────────────────────────────────────────────
+//  Document Symbols (textDocument/documentSymbol)
+// ────────────────────────────────────────────────────────────
+
+fn compute_document_symbols(text: &str, uri: &Uri) -> Vec<SymbolInformation> {
+    let src = preprocess_source(text);
+    let mut lex = Lexer::new(&src);
+    let tokens = lex.tokenize();
+    let mut par = Parser::new(tokens);
+    let ast = par.parse();
+    let mut syms: Vec<SymbolInformation> = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+
+    let mk_range = |line_1indexed: usize| -> Range {
+        let ln = (line_1indexed.saturating_sub(1)) as u32;
+        Range {
+            start: Position { line: ln, character: 0 },
+            end: Position { line: ln, character: lines.get(ln as usize).map(|l| l.len() as u32).unwrap_or(0) },
+        }
+    };
+
+    for (item, span) in &ast.items {
+        match item {
+            TopLevel::Function { name, .. } => {
+                #[allow(deprecated)]
+                syms.push(SymbolInformation {
+                    name: name.clone(),
+                    kind: SymbolKind::FUNCTION,
+                    tags: None,
+                    deprecated: None,
+                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    container_name: None,
+                });
+            }
+            TopLevel::Struct { name, .. } => {
+                #[allow(deprecated)]
+                syms.push(SymbolInformation {
+                    name: name.clone(),
+                    kind: SymbolKind::STRUCT,
+                    tags: None,
+                    deprecated: None,
+                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    container_name: None,
+                });
+            }
+            TopLevel::Enum { name, .. } => {
+                #[allow(deprecated)]
+                syms.push(SymbolInformation {
+                    name: name.clone(),
+                    kind: SymbolKind::ENUM,
+                    tags: None,
+                    deprecated: None,
+                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    container_name: None,
+                });
+            }
+            TopLevel::Trait { name, .. } => {
+                #[allow(deprecated)]
+                syms.push(SymbolInformation {
+                    name: name.clone(),
+                    kind: SymbolKind::INTERFACE,
+                    tags: None,
+                    deprecated: None,
+                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    container_name: None,
+                });
+            }
+            TopLevel::Module { name, .. } => {
+                #[allow(deprecated)]
+                syms.push(SymbolInformation {
+                    name: name.clone(),
+                    kind: SymbolKind::MODULE,
+                    tags: None,
+                    deprecated: None,
+                    location: Location { uri: uri.clone(), range: mk_range(span.line) },
+                    container_name: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    syms
+}
+
+// ────────────────────────────────────────────────────────────
+//  Signature Help (textDocument/signatureHelp)
+// ────────────────────────────────────────────────────────────
+
+fn compute_signature_help(text: &str, pos: Position) -> Option<SignatureHelp> {
+    // 현재 줄에서 커서 왼쪽으로 미완성 호출 찾기: foo(
+    let lines: Vec<&str> = text.lines().collect();
+    let line = lines.get(pos.line as usize)?;
+    let col = (pos.character as usize).min(line.len());
+    let before = &line[..col];
+
+    // 가장 마지막 '(' 찾기
+    let paren_pos = before.rfind('(')?;
+    let fn_part = before[..paren_pos].trim_end();
+    // 함수 이름 추출
+    let fn_name: String = fn_part.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<String>().chars().rev().collect();
+    if fn_name.is_empty() { return None; }
+
+    // 현재 몇 번째 인수인지 쉼표 카운트
+    let active_param = before[paren_pos + 1..].chars().filter(|&c| c == ',').count() as u32;
+
+    // AST에서 함수 정의 찾기
+    let src = preprocess_source(text);
+    let tokens = Lexer::new(&src).tokenize();
+    let mut par = Parser::new(tokens);
+    let ast = par.parse();
+    for (item, _) in &ast.items {
+        if let TopLevel::Function { name, params, return_ty, .. } = item {
+            if name != &fn_name { continue; }
+            let ps: Vec<String> = params.iter().map(|p| format!("{} {}", ty_str(&p.ty), p.name)).collect();
+            let ret = return_ty.as_ref().map(|t| format!(" -> {}", ty_str(t))).unwrap_or_default();
+            let label = format!("fn {}({}){}", name, ps.join(", "), ret);
+            let param_infos: Vec<ParameterInformation> = params.iter().map(|p| ParameterInformation {
+                label: ParameterLabel::Simple(format!("{} {}", ty_str(&p.ty), p.name)),
+                documentation: None,
+            }).collect();
+            return Some(SignatureHelp {
+                signatures: vec![SignatureInformation {
+                    label,
+                    documentation: None,
+                    parameters: Some(param_infos),
+                    active_parameter: Some(active_param),
+                }],
+                active_signature: Some(0),
+                active_parameter: Some(active_param),
+            });
+        }
+    }
+    None
+}

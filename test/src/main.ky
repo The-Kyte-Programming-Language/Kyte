@@ -1,4 +1,4 @@
-import "util.ky";
+import util.ky;
 
 struct Customer {
     int tier;

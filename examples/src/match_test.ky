@@ -1,0 +1,37 @@
+/// Match + Enum test
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+enum Option {
+    Some(int),
+    None,
+}
+
+@main(main) {
+    // 1) 정수 match
+    int x = 2;
+    match x {
+        1 => { print("one"); }
+        2 => { print("two"); }
+        3 => { print("three"); }
+        _ => { print("other"); }
+    }
+
+    // 2) enum 기본 사용
+    Color c = Color.Red;
+    match c {
+        Color.Red => { print("red"); }
+        Color.Green => { print("green"); }
+        Color.Blue => { print("blue"); }
+    }
+
+    // 3) 페이로드 enum
+    Option val = Option.Some(42);
+    match val {
+        Option.Some(n) => { print(n); }
+        Option.None => { print(0); }
+    }
+}

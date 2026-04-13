@@ -133,6 +133,30 @@ impl Lexer {
         Token::StringLit(s)
     }
 
+    fn read_fstring(&mut self) -> Token {
+        // f" 이후 호출됨. "까지 raw content를 읽어 FStringLit으로 반환
+        self.advance(); // opening "
+        let mut s = String::new();
+        while let Some(ch) = self.current() {
+            if ch == '"' { self.advance(); break; }
+            if ch == '\\' {
+                self.advance();
+                match self.current() {
+                    Some('n')  => { s.push('\n'); self.advance(); }
+                    Some('t')  => { s.push('\t'); self.advance(); }
+                    Some('\\') => { s.push('\\'); self.advance(); }
+                    Some('"')  => { s.push('"');  self.advance(); }
+                    Some('{')  => { s.push('{');  self.advance(); }
+                    _          => { s.push('\\'); }
+                }
+            } else {
+                s.push(ch);
+                self.advance();
+            }
+        }
+        Token::FStringLit(s)
+    }
+
     fn read_number(&mut self) -> Token {
         let mut s = String::new();
         let mut is_float = false;
@@ -211,6 +235,13 @@ impl Lexer {
             "struct"   => Token::Struct,
             "auto"     => Token::Auto,
             "assert"   => Token::Assert,
+            "enum"     => Token::Enum,
+            "match"    => Token::Match,
+            "trait"    => Token::Trait,
+            "impl"     => Token::Impl,
+            "mod"      => Token::Mod,
+            "const"    => Token::Const,
+            "import"   => Token::Import,
             "int"      => Token::Int,
             "float"    => Token::Float,
             "string"   => Token::String,
@@ -308,6 +339,9 @@ impl Lexer {
                             if self.current() == Some('=') {
                                 self.advance();
                                 Token::EqEq
+                            } else if self.current() == Some('>') {
+                                self.advance();
+                                Token::FatArrow
                             } else {
                                 Token::Eq
                             }
@@ -331,11 +365,7 @@ impl Lexer {
                                 self.advance();
                                 Token::Or
                             } else {
-                                self.errors.push(format!(
-                                    "Unexpected character '|' at line {}:{} — did you mean '||'?",
-                                    start_line, start_col
-                                ));
-                                continue;
+                                Token::Pipe
                             }
                         }
                         '-' => {
@@ -370,7 +400,15 @@ impl Lexer {
                         }
                         '"' => self.read_string(),
                         c if c.is_ascii_digit() => self.read_number(),
-                        c if c.is_alphabetic() || c == '_' => self.read_ident(),
+                        c if c.is_alphabetic() || c == '_' => {
+                            // f-string 감지: f"..."
+                            if c == 'f' && self.input.get(self.pos + 1) == Some(&'"') {
+                                self.advance(); // skip 'f'
+                                self.read_fstring()
+                            } else {
+                                self.read_ident()
+                            }
+                        }
                         _ => {
                             let c = ch;
                             self.advance();

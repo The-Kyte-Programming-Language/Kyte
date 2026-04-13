@@ -27,6 +27,16 @@ pub enum Token {
     Struct,       // struct
     Auto,         // auto (A07: 타입 추론)
     Assert,       // assert (A10)
+    Enum,         // enum
+    Match,        // match
+    FatArrow,     // =>
+    Trait,        // trait
+    Impl,         // impl
+    Mod,          // mod
+    Const,        // const
+    Fn,           // fn (closure)
+    Pipe,         // |
+    Import,       // import
 
     // 타입
     Int,          // int
@@ -46,6 +56,7 @@ pub enum Token {
     IntLit(i64),
     FloatLit(f64),
     StringLit(String),
+    FStringLit(String),  // f"hello {name}" — raw content for parser to expand
 
     // 식별자
     Ident(String),
@@ -122,6 +133,9 @@ pub enum Ty {
     Array(Box<Ty>),  // int[], u8[], etc.
     Struct(String),
     Auto,           // auto (A07: 타입 추론, analyzer가 해결)
+    Enum(String),        // enum 타입
+    TypeParam(String),   // 제네릭 타입 파라미터 (T, U 등)
+    Fn(Vec<Ty>, Option<Box<Ty>>),  // fn(int, int) -> bool  (클로저/함수 타입)
 }
 
 // 표현식
@@ -170,12 +184,31 @@ pub enum Expr {
         method: String,
         args: Vec<Expr>,
     },
+    // 열거형 변형 생성: Color.Red 또는 Option.Some(42)
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        value: Option<Box<Expr>>,
+    },
+    // 클로저: |x, y| { body } 또는 |x, y| expr
+    Closure {
+        params: Vec<(String, Option<Ty>)>,  // (name, opt_type)
+        body: Vec<(Stmt, Span)>,
+    },
+    // 문자열 보간: f"hello {name}, age={age}"
+    FStringLit(Vec<FStringPart>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum UnaryOpKind {
     Neg, // -
     Not, // !
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum FStringPart {
+    Literal(String),
+    Expr(Expr),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -190,6 +223,12 @@ pub enum BinOpKind {
 pub enum Stmt {
     // int x = 10;
     VarDecl {
+        ty:    Ty,
+        name:  String,
+        value: Expr,
+    },
+    // const int X = 10;
+    ConstDecl {
         ty:    Ty,
         name:  String,
         value: Expr,
@@ -262,6 +301,11 @@ pub enum Stmt {
         cond: Expr,
         message: Option<Expr>,
     },
+    // match 문
+    Match {
+        expr: Expr,
+        arms: Vec<MatchArm>,
+    },
     // 블록 내부 인라인 앵커
     InlineAnchor {
         name:  String,
@@ -285,6 +329,39 @@ pub struct StructField {
     pub name: String,
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct EnumVariant {
+    pub name: String,
+    pub ty: Option<Ty>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct TraitMethod {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_ty: Option<Ty>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Vec<(Stmt, Span)>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Pattern {
+    IntLit(i64),
+    FloatLit(f64),
+    StringLit(String),
+    Bool(bool),
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        binding: Option<String>,
+    },
+    Wildcard,
+}
+
 // 최상위 선언
 #[derive(Debug, PartialEq, Clone)]
 pub enum TopLevel {
@@ -298,6 +375,7 @@ pub enum TopLevel {
     // function add(int a, int b) -> int { ... }
     Function {
         name:       String,
+        type_params: Vec<String>,  // 제네릭: <T, U>
         params:     Vec<Param>,
         return_ty:  Option<Ty>,
         body:       Vec<(Stmt, Span)>,
@@ -306,6 +384,32 @@ pub enum TopLevel {
     Struct {
         name: String,
         fields: Vec<StructField>,
+    },
+    Enum {
+        name: String,
+        variants: Vec<EnumVariant>,
+    },
+    // trait Printable { fn to_string(self) -> string; }
+    Trait {
+        name: String,
+        methods: Vec<TraitMethod>,
+    },
+    // impl Printable for User { fn to_string(...) { ... } }
+    Impl {
+        trait_name: String,
+        target_ty: String,
+        methods: Vec<(TopLevel, Span)>,
+    },
+    // mod math { fn abs(...) {...} }
+    Module {
+        name: String,
+        items: Vec<(TopLevel, Span)>,
+    },
+    // const int MAX = 100;  (최상위 상수)
+    ConstDecl {
+        ty: Ty,
+        name: String,
+        value: Expr,
     },
 }
 

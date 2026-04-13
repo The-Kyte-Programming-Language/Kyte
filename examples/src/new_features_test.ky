@@ -1,0 +1,58 @@
+// Test: const, closures, f-strings, trait, impl, mod
+
+// constants
+const int MAX = 100;
+
+// module
+mod math {
+    fn add(int a, int b) -> int {
+        return a + b;
+    }
+    fn square(int n) -> int {
+        return n * n;
+    }
+}
+
+// trait definition
+trait Greet {
+    fn greet(string name) -> string;
+}
+
+// enum
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+@main(main) {
+    // const usage
+    int x = MAX;
+    print(x);
+
+    // mod call
+    int sum = math.add(3, 7);
+    print(sum);
+    int sq = math.square(5);
+    print(sq);
+
+    // closure: capture-free function pointer
+    auto double = |n: int| { return n * 2; };
+    int d = double(21);
+    print(d);
+
+    // match with enum
+    Color c = Color.Green;
+    match c {
+        Color.Red   => { print("red"); }
+        Color.Green => { print("green"); }
+        Color.Blue  => { print("blue"); }
+        _           => { print("other"); }
+    }
+
+    // f-string (stack-allocated, no malloc)
+    string name = "World";
+    int age = 42;
+    string msg = f"Hello {name}, age={age}";
+    print(msg);
+}

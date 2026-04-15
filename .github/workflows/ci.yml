@@ -80,8 +80,19 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          echo "LLVM_SYS_211_PREFIX=C:\Program Files\LLVM" >> $env:GITHUB_ENV
-          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          $llvmPath = "C:\Program Files\LLVM"
+          
+          if (!(Test-Path "$llvmPath\bin\llvm-config.exe")) {
+            $clangPath = (Get-Command clang -ErrorAction SilentlyContinue).Source
+            if ($clangPath) {
+              $llvmPath = $clangPath.Replace("\bin\clang.exe", "")
+            } else {
+              Write-Warning "LLVM 설치 경로를 찾을 수 없습니다!"
+            }
+          }
+          
+          echo "LLVM_SYS_211_PREFIX=$llvmPath" >> $env:GITHUB_ENV
+          echo "$llvmPath\bin" >> $env:GITHUB_PATH
 
       # ── 빌드 & 검사 ──
       - name: Check formatting

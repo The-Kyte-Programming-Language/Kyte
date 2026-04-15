@@ -25,9 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 1. Rust 툴체인 설정 (Windows는 GNU 타겟 추가)
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
+          targets: ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-gnu' || '' }}
           components: rustfmt, clippy
 
       - name: Cache cargo registry & build
@@ -40,7 +43,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # ── LLVM 설치 ──
+      # ── LLVM 설치 (Linux) ──
       - name: Install LLVM (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -54,6 +57,7 @@ jobs:
           sudo apt-get install -y llvm-${{ env.LLVM_VERSION }}-dev libpolly-${{ env.LLVM_VERSION }}-dev clang-${{ env.LLVM_VERSION }}
           echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-${{ env.LLVM_VERSION }}" >> $GITHUB_ENV
 
+      # ── LLVM 설치 (macOS) ──
       - name: Install LLVM (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -61,36 +65,22 @@ jobs:
           echo "LLVM_SYS_211_PREFIX=$(brew --prefix llvm@${{ env.LLVM_VERSION }})" >> $GITHUB_ENV
           echo "$(brew --prefix llvm@${{ env.LLVM_VERSION }})/bin" >> $GITHUB_PATH
 
-      - name: Cache LLVM
-        id: cache-llvm
+      # ── LLVM 설치 (Windows / MSYS2) ──
+      - name: Setup MSYS2 and Install LLVM (Windows)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: msys2/setup-msys2@v2
         with:
-          path: C:\Program Files\LLVM
-          # LLVM 버전이 바뀔 때만 새로 설치하도록 키 설정
-          key: ${{ runner.os }}-llvm-${{ env.LLVM_VERSION }}
-
-      - name: Install LLVM (Windows)
-        if: runner.os == 'Windows' && steps.cache-llvm.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          choco install llvm --version=${{ env.LLVM_VERSION }}.1.0 -y --no-progress
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-llvm
+          cache: true # MSYS2 자체 캐시 활성화
 
       - name: Set LLVM Env (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $llvmPath = "C:\Program Files\LLVM"
-          
-          if (!(Test-Path "$llvmPath\bin\llvm-config.exe")) {
-            $clangPath = (Get-Command clang -ErrorAction SilentlyContinue).Source
-            if ($clangPath) {
-              $llvmPath = $clangPath.Replace("\bin\clang.exe", "")
-            } else {
-              Write-Warning "LLVM 설치 경로를 찾을 수 없습니다!"
-            }
-          }
-          
+          # MSYS2 MinGW64 경로 설정 (공백 없음, llvm-config 포함)
+          $llvmPath = "C:\msys64\mingw64"
           echo "LLVM_SYS_211_PREFIX=$llvmPath" >> $env:GITHUB_ENV
           echo "$llvmPath\bin" >> $env:GITHUB_PATH
 
@@ -99,13 +89,34 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Clippy lint
-        run: cargo clippy -- -D warnings
+        # Windows는 GNU 타겟으로 린트 실행
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            cargo clippy --target x86_64-pc-windows-gnu -- -D warnings
+          else
+            cargo clippy -- -D warnings
+          fi
+        shell: bash
 
       - name: Build
-        run: cargo build --release
+        # Windows는 GNU 타겟으로 빌드
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            cargo build --release --target x86_64-pc-windows-gnu
+          else
+            cargo build --release
+          fi
+        shell: bash
 
       - name: Run built-in tests
-        run: cargo run --release -- test
+        # Windows는 빌드된 gnu 바이너리 실행
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            cargo run --release --target x86_64-pc-windows-gnu -- test
+          else
+            cargo run --release -- test
+          fi
+        shell: bash
 
       # ── VS Code 확장 ──
       - name: Setup Node.js
@@ -124,5 +135,5 @@ jobs:
           name: kyte-${{ runner.os }}
           path: |
             target/release/kyte
-            target/release/kyte.exe
+            target/x86_64-pc-windows-gnu/release/kyte.exe
           if-no-files-found: ignore

@@ -1,0 +1,16 @@
+#test_fail_E004
+fn undeclared_var_case() -> int {
+    int x = not_declared;
+    return x;
+}
+
+#test(fail_E004)
+fn undeclared_var_case() -> int {
+    int x = not_declared;
+    return x;
+}
+
+@main(main) {
+    int x = not_declared;
+    print(x);
+}

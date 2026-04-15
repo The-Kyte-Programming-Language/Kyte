@@ -2,19 +2,45 @@
   "name": "Kyte",
   "scopeName": "source.kyte",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#strings" },
-    { "include": "#decorators" },
-    { "include": "#imports" },
-    { "include": "#numbers" },
-    { "include": "#anchors" },
-    { "include": "#keywords" },
-    { "include": "#types" },
-    { "include": "#functions" },
-    { "include": "#variables" },
-    { "include": "#operators" },
-    { "include": "#punctuation" },
-    { "include": "#constants" }
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#decorators"
+    },
+    {
+      "include": "#imports"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#anchors"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#constants"
+    }
   ],
   "repository": {
     "comments": {
@@ -46,7 +72,9 @@
           "name": "meta.annotation.kyte",
           "begin": "#\\s*([a-zA-Z_]\\w*)\\s*\\(",
           "beginCaptures": {
-            "1": { "name": "entity.name.function.decorator.kyte" }
+            "1": {
+              "name": "entity.name.function.decorator.kyte"
+            }
           },
           "end": "\\)",
           "patterns": [
@@ -58,8 +86,12 @@
               "name": "constant.other.error-code.kyte",
               "match": "\\bfail_[A-Z][0-9]{3}\\b"
             },
-            { "include": "#strings" },
-            { "include": "#numbers" }
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#numbers"
+            }
           ]
         },
         {
@@ -74,7 +106,9 @@
           "name": "meta.import.kyte",
           "begin": "\\bimport\\b",
           "beginCaptures": {
-            "0": { "name": "keyword.other.kyte" }
+            "0": {
+              "name": "keyword.other.kyte"
+            }
           },
           "end": ";",
           "patterns": [
@@ -141,6 +175,38 @@
     "functions": {
       "patterns": [
         {
+          "comment": "module.method() 형태 — import된 모듈 사용",
+          "name": "meta.method-call.kyte",
+          "match": "\\b([a-zA-Z_]\\w*)(\\.)(([a-zA-Z_]\\w*)\\s*(?=\\())",
+          "captures": {
+            "1": {
+              "name": "variable.other.module.kyte"
+            },
+            "2": {
+              "name": "punctuation.accessor.kyte"
+            },
+            "4": {
+              "name": "entity.name.function.kyte"
+            }
+          }
+        },
+        {
+          "comment": "module.field 형태 — 함수 호출 아닌 필드 접근",
+          "name": "meta.member-access.kyte",
+          "match": "\\b([a-zA-Z_]\\w*)(\\.)(([a-zA-Z_]\\w*))",
+          "captures": {
+            "1": {
+              "name": "variable.other.module.kyte"
+            },
+            "2": {
+              "name": "punctuation.accessor.kyte"
+            },
+            "4": {
+              "name": "variable.other.member.kyte"
+            }
+          }
+        },
+        {
           "name": "entity.name.function.kyte",
           "match": "\\b([a-zA-Z_]\\w*)\\s*(?=\\()"
         },
@@ -174,7 +240,7 @@
       "patterns": [
         {
           "name": "punctuation.separator.kyte",
-          "match": "[\\[\\]{}(),;.]"
+          "match": "[\\[\\]{}(),;]"
         }
       ]
     },

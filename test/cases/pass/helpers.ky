@@ -1,0 +1,2 @@
+#test(skip)
+fn mul(int a, int b) -> int { return a * b; }

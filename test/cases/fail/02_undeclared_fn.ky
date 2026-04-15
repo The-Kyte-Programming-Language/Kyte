@@ -1,0 +1,16 @@
+#test_fail_E013
+fn undeclared_fn_case() -> int {
+    int x = missing_func(1, 2);
+    return x;
+}
+
+#test(fail_E013)
+fn undeclared_fn_case() -> int {
+    int x = missing_func(1, 2);
+    return x;
+}
+
+@main(main) {
+    int x = missing_func(1, 2);
+    print(x);
+}

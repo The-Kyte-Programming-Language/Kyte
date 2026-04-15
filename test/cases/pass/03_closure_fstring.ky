@@ -1,0 +1,17 @@
+#test(success)
+fn closure_fstring_test() -> int {
+    auto double = |n: int| { return n * 2; };
+    int x = double(21);
+    string name = "kyte";
+    string msg = f"hello {name} {x}";
+    print(msg);
+    return x;
+}
+
+@main(main) {
+    auto double = |n: int| { return n * 2; };
+    int x = double(21);
+    string name = "kyte";
+    string msg = f"hello {name} {x}";
+    print(msg);
+}

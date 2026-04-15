@@ -1,0 +1,42 @@
+#test(success, 3)
+fn int_return() -> int {
+    return 1 + 2;
+}
+
+#test(success, 3.14)
+fn float_return() -> float {
+    return 3.14;
+}
+
+#test(success, 2.5)
+fn float_arith() -> float {
+    return 5.0 / 2.0;
+}
+
+#test(success, true)
+fn bool_return() -> bool {
+    return true;
+}
+
+#test(success, false)
+fn bool_false_return() -> bool {
+    return false;
+}
+
+#test(success, -5)
+fn negative_int() -> int {
+    return -5;
+}
+
+#test(success, 10)
+fn call_with_args() -> int {
+    return add_two(3, 7);
+}
+
+fn add_two(int a, int b) -> int {
+    return a + b;
+}
+
+@main(main) {
+    print("expected value tests");
+}

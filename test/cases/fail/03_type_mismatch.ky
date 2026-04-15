@@ -1,0 +1,12 @@
+#test(fail)
+fn type_mismatch_case() -> int {
+    int x = 1;
+    x = "oops";
+    return x;
+}
+
+@main(main) {
+    int x = 1;
+    x = "oops";
+    print(x);
+}

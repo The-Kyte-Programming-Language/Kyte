@@ -1,0 +1,11 @@
+import "helpers.ky";
+
+#test(success)
+fn import_helper_test() -> int {
+    return mul(6, 7);
+}
+
+@main(main) {
+    int y = mul(6, 7);
+    print(y);
+}

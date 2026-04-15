@@ -1,0 +1,15 @@
+#test(success)
+fn unit_add() -> int {
+    int x = 1 + 2;
+    return x;
+}
+
+#test(success)
+fn unit_string() -> string {
+    string s = "ok";
+    return s;
+}
+
+@main(main) {
+    print(1);
+}

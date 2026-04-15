@@ -1,0 +1,11 @@
+fn add(int a, int b) -> int { return a + b; }
+
+#test(success,3)
+fn basic_add_test() -> int {
+    return add(1, 2);
+}
+
+@main(main) {
+    int x = add(1, 2);
+    print(x);
+}

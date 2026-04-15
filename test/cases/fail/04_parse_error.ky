@@ -1,0 +1,16 @@
+#test_fail
+fn parse_error_case() -> int {
+    int x = 10
+    return x;
+}
+
+#test(fail)
+fn parse_error_case() -> int {
+    int x = 10
+    return x;
+}
+
+@main(main) {
+    int x = 10
+    print(x);
+}

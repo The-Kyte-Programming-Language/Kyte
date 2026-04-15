@@ -10,7 +10,9 @@ crash.log
 output.ll
 
 # Local playground project
-/test/
+/test/src/
+/test/test.exe
+/test/wind.toml
 
 # VS Code extension dependencies
 /editors/vscode/node_modules/

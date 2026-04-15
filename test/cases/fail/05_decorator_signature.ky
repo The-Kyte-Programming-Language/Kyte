@@ -1,0 +1,8 @@
+#test(fail)
+fn bad_sig(int x) -> int {
+    return x;
+}
+
+@main(main) {
+    print(0);
+}

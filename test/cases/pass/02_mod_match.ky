@@ -1,0 +1,38 @@
+mod math {
+    fn add(int a, int b) -> int { return a + b; }
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+#test(success)
+fn mod_call_test() -> int {
+    return math.add(3, 4);
+}
+
+#test(success)
+fn enum_match_test() -> int {
+    Color c = Color.Green;
+    match c {
+        Color.Red => { return 1; }
+        Color.Green => { return 2; }
+        Color.Blue => { return 3; }
+        _ => { return 0; }
+    }
+    return 0;
+}
+
+@main(main) {
+    int s = math.add(3, 4);
+    print(s);
+    Color c = Color.Green;
+    match c {
+        Color.Red => { print("r"); }
+        Color.Green => { print("g"); }
+        Color.Blue => { print("b"); }
+        _ => { print("x"); }
+    }
+}

@@ -29,7 +29,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          targets: ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-gnu' || '' }}
+          # GNU 타겟 제거 → Windows 기본값(MSVC)으로 통일
           components: rustfmt, clippy
 
       - name: Cache cargo registry & build
@@ -42,61 +42,60 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # ── LLVM 설치 (3개 플랫폼 통합) ──
-      - name: Install LLVM
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "21"
+      # ── LLVM 설치 (Linux) ──
+      - name: Install LLVM (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl gnupg ca-certificates lsb-release
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/llvm.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${{ env.LLVM_VERSION }} main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y llvm-${{ env.LLVM_VERSION }}-dev libpolly-${{ env.LLVM_VERSION }}-dev clang-${{ env.LLVM_VERSION }}
+          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-${{ env.LLVM_VERSION }}" >> $GITHUB_ENV
 
-      - name: Set LLVM_SYS_211_PREFIX
-        shell: bash
-        run: echo "LLVM_SYS_211_PREFIX=$LLVM_PATH" >> $GITHUB_ENV
+      # ── LLVM 설치 (macOS) ──
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@${{ env.LLVM_VERSION }}
+          LLVM_PREFIX=$(brew --prefix llvm@${{ env.LLVM_VERSION }})
+          echo "LLVM_SYS_211_PREFIX=$LLVM_PREFIX" >> $GITHUB_ENV
+          echo "$LLVM_PREFIX/bin" >> $GITHUB_PATH
 
-      # Windows GNU 타겟용 MinGW 툴체인 설치
-      - name: Install MinGW (Windows)
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: false
-          install: mingw-w64-x86_64-gcc
-
-      - name: Add MinGW to PATH (Windows)
+      # ── LLVM 설치 (Windows) ──
+      # MSVC 타겟 사용 → 공식 LLVM Windows 인스톨러로 설치
+      - name: Install LLVM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+        run: |
+          $ver = "21.1.8"
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/LLVM-$ver-win64.exe"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\llvm.exe"
+          Start-Process -Wait "$env:TEMP\llvm.exe" -ArgumentList "/S"
+          echo "LLVM_SYS_211_PREFIX=C:\Program Files\LLVM" >> $env:GITHUB_ENV
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       # ── 빌드 & 검사 ──
       - name: Check formatting
         run: cargo fmt -- --check
 
       - name: Clippy lint
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            cargo clippy --target x86_64-pc-windows-gnu -- -D warnings
-          else
-            cargo clippy -- -D warnings
-          fi
+        run: cargo clippy -- -D warnings
         shell: bash
 
       - name: Build
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            cargo build --release --target x86_64-pc-windows-gnu
-          else
-            cargo build --release
-          fi
+        run: cargo build --release
         shell: bash
 
       - name: Run built-in tests
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            cargo run --release --target x86_64-pc-windows-gnu -- test
-          else
-            cargo run --release -- test
-          fi
+        run: cargo run --release -- test
         shell: bash
 
+      # ── VS Code 확장 ──
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -106,11 +105,10 @@ jobs:
         working-directory: editors/vscode
         run: npm ci --ignore-scripts || npm install
 
+      # ── 아티팩트 업로드 ──
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: kyte-${{ runner.os }}
-          path: |
-            target/release/kyte
-            target/x86_64-pc-windows-gnu/release/kyte.exe
+          path: target/release/kyte${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: ignore

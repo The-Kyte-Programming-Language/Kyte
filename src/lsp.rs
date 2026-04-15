@@ -131,7 +131,7 @@ fn dispatch_request(
         "textDocument/completion" => {
             let p: CompletionParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
-            let list = compute_completions(docs.get(uri).map(|s: &String| s.as_str()));
+            let list = compute_completions(uri, docs.get(uri).map(|s: &String| s.as_str()));
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), list)))?;
         }
@@ -250,7 +250,8 @@ fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &mut String)
         Err(_) => return,
     };
 
-    let base_dir = resolved.parent()
+    let base_dir = resolved
+        .parent()
         .or_else(|| path.parent())
         .unwrap_or_else(|| Path::new("."));
 
@@ -1099,7 +1100,7 @@ fn ty_str(ty: &Ty) -> String {
 //  자동완성(Completion)
 // ────────────────────────────────────────────────────────────
 
-fn compute_completions(text: Option<&str>) -> CompletionList {
+fn compute_completions(uri: &Uri, text: Option<&str>) -> CompletionList {
     let mut items: Vec<CompletionItem> = KEYWORDS
         .iter()
         .map(|&(label, kind, detail)| CompletionItem {
@@ -1110,17 +1111,57 @@ fn compute_completions(text: Option<&str>) -> CompletionList {
         })
         .collect();
 
-    // 문서에서 함수 이름도 추가
+    // 현재 파일 함수 추가
     if let Some(src) = text {
         let src = src.to_string();
         if let Ok(fns) = catch_unwind(AssertUnwindSafe(|| extract_fn_names(&src))) {
             for (name, sig) in fns {
                 items.push(CompletionItem {
-                    label: name,
+                    label: name.clone(),
                     kind: Some(CompletionItemKind::FUNCTION),
                     detail: Some(sig),
                     ..Default::default()
                 });
+            }
+        }
+
+        // import한 파일들의 함수도 추가
+        if let Some(root_path) = uri_to_file_path(uri) {
+            let base_dir = root_path.parent().unwrap_or_else(|| Path::new("."));
+            let mut seen: HashSet<PathBuf> = HashSet::new();
+            if let Ok(canon) = fs::canonicalize(&root_path) {
+                seen.insert(canon);
+            } else {
+                seen.insert(root_path.clone());
+            }
+
+            for line in src.lines() {
+                if let Some(rel) = parse_import_path(line) {
+                    let import_path = base_dir.join(&rel);
+                    let resolved =
+                        fs::canonicalize(&import_path).unwrap_or_else(|_| import_path.clone());
+
+                    if seen.insert(resolved.clone()) {
+                        if let Ok(import_src) = fs::read_to_string(&resolved)
+                            .or_else(|_| fs::read_to_string(&import_path))
+                        {
+                            // import 파일 이름 (detail에 표시)
+                            let file_label = rel.clone();
+                            if let Ok(fns) =
+                                catch_unwind(AssertUnwindSafe(|| extract_fn_names(&import_src)))
+                            {
+                                for (name, sig) in fns {
+                                    items.push(CompletionItem {
+                                        label: name,
+                                        kind: Some(CompletionItemKind::FUNCTION),
+                                        detail: Some(format!("{} [from {}]", sig, file_label)),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -238,20 +238,22 @@ fn append_non_import_lines(src: &str, out: &mut String) {
 }
 
 fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &mut String) {
-    let canonical = match fs::canonicalize(path) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-    if !seen.insert(canonical.clone()) {
+    // canonicalize 실패해도(Windows에서 흔함) 원본 경로로 폴백
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    if !seen.insert(resolved.clone()) {
         return;
     }
 
-    let text = match fs::read_to_string(&canonical) {
+    let text = match fs::read_to_string(&resolved).or_else(|_| fs::read_to_string(path)) {
         Ok(t) => t,
         Err(_) => return,
     };
 
-    let base_dir = canonical.parent().unwrap_or_else(|| Path::new("."));
+    let base_dir = resolved.parent()
+        .or_else(|| path.parent())
+        .unwrap_or_else(|| Path::new("."));
+
     for line in text.lines() {
         if let Some(rel) = parse_import_path(line) {
             visit_import_file(&base_dir.join(rel), seen, out);
@@ -260,7 +262,7 @@ fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &mut String)
 
     out.push_str(&format!(
         "\n// ---- import file: {} ----\n",
-        canonical.display()
+        resolved.display()
     ));
     append_non_import_lines(&text, out);
 }
@@ -287,26 +289,29 @@ fn uri_to_file_path(uri: &Uri) -> Option<PathBuf> {
         return None;
     }
     let mut path = raw.trim_start_matches("file://").to_string();
-    // Windows file URI: file:///C:/...
+    // URL 디코딩
+    path = path.replace("%20", " ");
+    path = path.replace("%3A", ":").replace("%3a", ":");
+    // Windows file URI: file:///C:/... -> /C:/... -> C:/...
+    // 슬래시로 시작하고 두 번째 문자 뒤에 콜론이 있으면 Windows 드라이브 경로
     if path.starts_with('/') {
-        let bytes = path.as_bytes();
-        if bytes.len() > 2 && bytes[2] == b':' {
-            path.remove(0);
+        let rest = &path[1..];
+        if rest.len() >= 2 && rest.as_bytes()[1] == b':' {
+            path = rest.to_string();
         }
     }
-    // Minimal decode for common workspace paths.
-    path = path.replace("%20", " ");
+    // 백슬래시 정규화 (혹시 섞여있을 경우)
+    path = path.replace('/', std::path::MAIN_SEPARATOR_STR);
     Some(PathBuf::from(path))
 }
 
-fn preprocess_source_with_imports(uri: &Uri, text: &str) -> (String, usize) {
+fn preprocess_source_with_imports(uri: &Uri, text: &str) -> (String, usize, usize) {
     let own_line_count = text.lines().count();
     let mut merged = String::new();
-    append_non_import_lines(text, &mut merged);
 
     let root_path = match uri_to_file_path(uri) {
         Some(p) => p,
-        None => return (preprocess_source(text), own_line_count),
+        None => return (preprocess_source(text), 0, own_line_count),
     };
     let base_dir = root_path.parent().unwrap_or_else(|| Path::new("."));
     let mut seen = HashSet::new();
@@ -314,17 +319,25 @@ fn preprocess_source_with_imports(uri: &Uri, text: &str) -> (String, usize) {
         seen.insert(canon);
     }
 
+    // import 파일을 먼저 — 현재 파일보다 앞에 붙여야
+    // analyzer가 함수 선언을 사용 전에 볼 수 있음
     for line in text.lines() {
         if let Some(rel) = parse_import_path(line) {
             visit_import_file(&base_dir.join(rel), &mut seen, &mut merged);
         }
     }
 
-    (merged, own_line_count)
+    // import 파일들이 차지하는 라인 수
+    let import_line_offset = merged.lines().count();
+
+    // 현재 파일은 나중에
+    append_non_import_lines(text, &mut merged);
+
+    (merged, import_line_offset, own_line_count)
 }
 
 fn analyze_text(uri: &Uri, text: &str) -> Vec<Diagnostic> {
-    let (src, own_line_count) = preprocess_source_with_imports(uri, text);
+    let (src, import_line_offset, own_line_count) = preprocess_source_with_imports(uri, text);
     let has_main_anchor = text.contains("@") && text.contains("(main)");
     let result = catch_unwind(AssertUnwindSafe(|| {
         let mut lex = Lexer::new(&src);
@@ -338,8 +351,11 @@ fn analyze_text(uri: &Uri, text: &str) -> Vec<Diagnostic> {
         Ok(errs) => errs
             .into_iter()
             .filter(|e| {
-                // 현재 파일 라인 범위에 해당하는 진단만 표시 (import 파일 라인 제외)
-                if e.span.line > own_line_count.max(1) {
+                // import 파일 라인(앞부분)의 진단은 제외, 현재 파일 라인만 표시
+                if e.span.line <= import_line_offset {
+                    return false;
+                }
+                if e.span.line > import_line_offset + own_line_count.max(1) {
                     return false;
                 }
                 // 라이브러리/helper 파일에서는 main 앵커 강제 진단 숨김
@@ -348,7 +364,12 @@ fn analyze_text(uri: &Uri, text: &str) -> Vec<Diagnostic> {
                 }
                 true
             })
-            .map(|e| to_diagnostic(&e))
+            .map(|e| {
+                // 라인 번호에서 import offset을 빼서 현재 파일 기준으로 변환
+                let mut adjusted = e.clone();
+                adjusted.span.line = adjusted.span.line.saturating_sub(import_line_offset);
+                to_diagnostic(&adjusted)
+            })
             .collect(),
         Err(panic) => {
             let msg = panic

@@ -95,13 +95,17 @@ impl<'ctx> Codegen<'ctx> {
 
     pub(super) fn build_alloca(&self, name: &str, ty: &Ty) -> PointerValue<'ctx> {
         let entry = self.current_fn.unwrap().get_first_basic_block().unwrap();
-        let temp_builder = self.context.create_builder();
+        let save_bb = self.builder.get_insert_block();
         match entry.get_first_instruction() {
-            Some(inst) => temp_builder.position_before(&inst),
-            None => temp_builder.position_at_end(entry),
+            Some(inst) => self.builder.position_before(&inst),
+            None => self.builder.position_at_end(entry),
         }
         let llvm_ty = self.ty_to_basic(ty);
-        temp_builder.build_alloca(llvm_ty, name).unwrap()
+        let ptr = self.builder.build_alloca(llvm_ty, name).unwrap();
+        if let Some(bb) = save_bb {
+            self.builder.position_at_end(bb);
+        }
+        ptr
     }
 
     pub(super) fn global_string_ptr(&mut self, value: &str, prefix: &str) -> PointerValue<'ctx> {
@@ -121,6 +125,19 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     pub(super) fn type_size_bytes(&mut self, ty: &Ty) -> u64 {
+        // Fast path for non-struct types — no HashSet needed
+        match ty {
+            Ty::I8 | Ty::U8 | Ty::Bool => return 1,
+            Ty::I16 | Ty::U16 => return 2,
+            Ty::I32 | Ty::U32 => return 4,
+            Ty::Int | Ty::I64 | Ty::U64 | Ty::Float | Ty::String | Ty::Array(_) => return 8,
+            Ty::Enum(name) => {
+                let payload = self.enum_payload_sizes.get(name).copied().unwrap_or(0);
+                return 4 + payload;
+            }
+            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => return 8,
+            Ty::Struct(_) => {}
+        }
         let mut visiting = HashSet::new();
         self.type_size_bytes_with_visiting(ty, &mut visiting)
     }

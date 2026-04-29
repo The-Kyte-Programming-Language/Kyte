@@ -67,10 +67,11 @@ static KYTE_TLS int            kyte_depth = 0;
 /* ── Signal handler ──────────────────────────────────────────────────────────── */
 
 static void kyte_handle_signal(int sig) {
-    int i;
-    for (i = kyte_depth - 1; i >= 0; --i) {
-        if (kyte_slots[i].in_use) {
-            longjmp(kyte_slots[i].buf, sig);
+    /* O(1): top slot is always kyte_depth-1 when inside an anchor */
+    if (kyte_depth > 0) {
+        int top = kyte_depth - 1;
+        if (kyte_slots[top].in_use) {
+            longjmp(kyte_slots[top].buf, sig);
             /* unreachable */
         }
     }
@@ -176,38 +177,44 @@ typedef struct {
     const char *name;        /* for logging                          */
 } KyteThreadCtx;
 
-#if defined(KYTE_POSIX)
-
-static void *kyte_thread_worker(void *raw) {
-    KyteThreadCtx *ctx = (KyteThreadCtx *)raw;
+/* Shared supervision loop — called from both POSIX and Windows thread entry */
+static void kyte_thread_run(KyteThreadCtx *ctx) {
     int attempt = 0;
-    kyte_install_signals();   /* per-thread signal handler           */
-    while (attempt <= ctx->max_restarts) {
-        if (attempt > 0) {
-            kyte_log_restart(ctx->name, attempt);
-        }
+    kyte_install_signals();
+    for (; attempt <= ctx->max_restarts; ++attempt) {
+        if (attempt > 0) kyte_log_restart(ctx->name, attempt);
         ctx->body(ctx->arg);
-        attempt++;
     }
     kyte_log_escalate(ctx->name);
     free(ctx);
-    return NULL;
 }
 
-int kyte_spawn_thread_anchor(void (*body)(void *),
-                              void  *arg,
-                              int    max_restarts,
-                              const char *anchor_name) {
-    KyteThreadCtx *ctx;
-    pthread_t tid;
-    int rc;
-    ctx = (KyteThreadCtx *)malloc(sizeof(*ctx));
-    if (!ctx) return -1;
+/* Shared ctx allocation helper */
+static KyteThreadCtx *kyte_make_ctx(void (*body)(void *), void *arg,
+                                     int max_restarts, const char *name) {
+    KyteThreadCtx *ctx = (KyteThreadCtx *)malloc(sizeof(*ctx));
+    if (!ctx) return NULL;
     ctx->body         = body;
     ctx->arg          = arg;
     ctx->max_restarts = (max_restarts > 0) ? max_restarts : 3;
-    ctx->name         = anchor_name;
-    rc = pthread_create(&tid, NULL, kyte_thread_worker, ctx);
+    ctx->name         = name;
+    return ctx;
+}
+
+#if defined(KYTE_POSIX)
+
+static void *kyte_thread_entry(void *raw) {
+    kyte_thread_run((KyteThreadCtx *)raw);
+    return NULL;
+}
+
+int kyte_spawn_thread_anchor(void (*body)(void *), void *arg,
+                              int max_restarts, const char *anchor_name) {
+    KyteThreadCtx *ctx = kyte_make_ctx(body, arg, max_restarts, anchor_name);
+    pthread_t tid;
+    int rc;
+    if (!ctx) return -1;
+    rc = pthread_create(&tid, NULL, kyte_thread_entry, ctx);
     if (rc != 0) { free(ctx); return rc; }
     pthread_detach(tid);
     return 0;
@@ -215,33 +222,17 @@ int kyte_spawn_thread_anchor(void (*body)(void *),
 
 #elif defined(KYTE_WINDOWS)
 
-static unsigned __stdcall kyte_thread_worker(void *raw) {
-    KyteThreadCtx *ctx = (KyteThreadCtx *)raw;
-    int attempt = 0;
-    kyte_install_signals();
-    while (attempt <= ctx->max_restarts) {
-        if (attempt > 0) kyte_log_restart(ctx->name, attempt);
-        ctx->body(ctx->arg);
-        attempt++;
-    }
-    kyte_log_escalate(ctx->name);
-    free(ctx);
+static unsigned __stdcall kyte_thread_entry(void *raw) {
+    kyte_thread_run((KyteThreadCtx *)raw);
     return 0;
 }
 
-int kyte_spawn_thread_anchor(void (*body)(void *),
-                              void  *arg,
-                              int    max_restarts,
-                              const char *anchor_name) {
-    KyteThreadCtx *ctx;
+int kyte_spawn_thread_anchor(void (*body)(void *), void *arg,
+                              int max_restarts, const char *anchor_name) {
+    KyteThreadCtx *ctx = kyte_make_ctx(body, arg, max_restarts, anchor_name);
     uintptr_t h;
-    ctx = (KyteThreadCtx *)malloc(sizeof(*ctx));
     if (!ctx) return -1;
-    ctx->body         = body;
-    ctx->arg          = arg;
-    ctx->max_restarts = (max_restarts > 0) ? max_restarts : 3;
-    ctx->name         = anchor_name;
-    h = _beginthreadex(NULL, 0, kyte_thread_worker, ctx, 0, NULL);
+    h = _beginthreadex(NULL, 0, kyte_thread_entry, ctx, 0, NULL);
     if (h == 0) { free(ctx); return -1; }
     CloseHandle((HANDLE)h);
     return 0;

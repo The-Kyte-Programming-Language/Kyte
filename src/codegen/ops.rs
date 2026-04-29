@@ -404,89 +404,65 @@ impl<'ctx> Codegen<'ctx> {
         if *ty == Ty::String {
             return val.into_pointer_value();
         }
-        let malloc = self.module.get_function("malloc").unwrap();
+
+        // Bool: return global literal — zero allocation
+        if *ty == Ty::Bool {
+            let true_str = self.global_string_ptr("true", "s_true");
+            let false_str = self.global_string_ptr("false", "s_false");
+            return self
+                .builder
+                .build_select(val.into_int_value(), true_str, false_str, "bsel")
+                .unwrap()
+                .into_pointer_value();
+        }
+
+        // Numeric: fixed 32-byte stack buffer — no malloc, single snprintf
+        // Max length: i64 = 20 chars, f64 = ~25 chars — 32 is always sufficient
         let snprintf = self.module.get_function("snprintf").unwrap();
+        let i8_ty = self.context.i8_type();
+        let buf_size = 32u64;
+        let buf = self
+            .builder
+            .build_array_alloca(i8_ty, self.i64_type().const_int(buf_size, false), "num_buf")
+            .unwrap();
 
-        let null_ptr = self.ptr_type().const_null();
-        let zero_size = self.i64_type().const_int(0, false);
-
-        let (fmt_ptr, fmt_args): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum<'ctx>>) = match ty
-        {
+        let (fmt_ptr, arg): (PointerValue<'ctx>, BasicMetadataValueEnum<'ctx>) = match ty {
             Ty::Float => {
                 let fmt = self.global_string_ptr("%f", "fmt_f2s");
-                (fmt, vec![val.into()])
-            }
-            Ty::Bool => {
-                let true_str = self.global_string_ptr("true", "s_true");
-                let false_str = self.global_string_ptr("false", "s_false");
-                let selected = self
-                    .builder
-                    .build_select(val.into_int_value(), true_str, false_str, "sel")
-                    .unwrap();
-                let fmt = self.global_string_ptr("%s", "fmt_b2s");
-                (fmt, vec![selected.into()])
+                (fmt, val.into())
             }
             _ => {
                 let iv = val.into_int_value();
                 let is_unsigned = matches!(ty, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64);
-                let print_val = if iv.get_type().get_bit_width() < 64 {
+                let wide = if iv.get_type().get_bit_width() < 64 {
                     if is_unsigned {
-                        self.builder
-                            .build_int_z_extend(iv, self.i64_type(), "ext")
-                            .unwrap()
+                        self.builder.build_int_z_extend(iv, self.i64_type(), "ext").unwrap()
                     } else {
-                        self.builder
-                            .build_int_s_extend(iv, self.i64_type(), "ext")
-                            .unwrap()
+                        self.builder.build_int_s_extend(iv, self.i64_type(), "ext").unwrap()
                     }
                 } else {
                     iv
                 };
-                let fmt_str = if is_unsigned { "%llu" } else { "%lld" };
-                let fmt = self.global_string_ptr(fmt_str, "fmt_i2s");
-                (fmt, vec![print_val.into()])
+                let fmt = self.global_string_ptr(
+                    if is_unsigned { "%llu" } else { "%lld" },
+                    "fmt_i2s",
+                );
+                (fmt, wide.into())
             }
         };
 
-        let mut pass1_args: Vec<BasicMetadataValueEnum<'ctx>> =
-            vec![null_ptr.into(), zero_size.into(), fmt_ptr.into()];
-        pass1_args.extend(fmt_args.iter().cloned());
-        let needed = self
-            .builder
-            .build_call(snprintf, &pass1_args, "snprintf_len")
-            .unwrap()
-            .try_as_basic_value()
-            .basic()
-            .unwrap()
-            .into_int_value();
-        let needed_i64 = self
-            .builder
-            .build_int_s_extend(needed, self.i64_type(), "needed_i64")
+        self.builder
+            .build_call(
+                snprintf,
+                &[
+                    buf.into(),
+                    self.i64_type().const_int(buf_size, false).into(),
+                    fmt_ptr.into(),
+                    arg,
+                ],
+                "",
+            )
             .unwrap();
-        let buf_size = self
-            .builder
-            .build_int_add(needed_i64, self.i64_type().const_int(1, false), "buf_size")
-            .unwrap();
-
-        let buf = self
-            .builder
-            .build_call(malloc, &[buf_size.into()], "conv_buf")
-            .unwrap()
-            .try_as_basic_value()
-            .basic()
-            .unwrap()
-            .into_pointer_value();
-
-        self.emit_null_check(buf, "to_string_ptr");
-
-        if let Some(top) = self.string_temp_stack.last_mut() {
-            top.push(buf);
-        }
-
-        let mut pass2_args: Vec<BasicMetadataValueEnum<'ctx>> =
-            vec![buf.into(), buf_size.into(), fmt_ptr.into()];
-        pass2_args.extend(fmt_args.iter().cloned());
-        self.builder.build_call(snprintf, &pass2_args, "").unwrap();
 
         buf
     }

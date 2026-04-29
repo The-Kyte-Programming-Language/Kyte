@@ -7,10 +7,9 @@ impl<'ctx> Codegen<'ctx> {
     pub(super) fn store_var(&self, name: &str, val: BasicValueEnum<'ctx>) {
         let ptr = self.variables[name];
         if self.vault_vars.contains(name) {
-            // vault: alloca → heap pointer, store value to heap
             let heap_ptr = self
                 .builder
-                .build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
+                .build_load(self.ptr_type(), ptr, "vptr")
                 .unwrap()
                 .into_pointer_value();
             self.builder.build_store(heap_ptr, val).unwrap();
@@ -22,10 +21,9 @@ impl<'ctx> Codegen<'ctx> {
     pub(super) fn load_var(&self, name: &str, ty: &Ty) -> BasicValueEnum<'ctx> {
         if let Some(&ptr) = self.variables.get(name) {
             if self.vault_vars.contains(name) {
-                // vault: alloca → heap pointer → actual value
                 let heap_ptr = self
                     .builder
-                    .build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
+                    .build_load(self.ptr_type(), ptr, "vptr")
                     .unwrap()
                     .into_pointer_value();
                 let llvm_ty = self.ty_to_basic(ty);
@@ -56,7 +54,7 @@ impl<'ctx> Codegen<'ctx> {
         if let Some(ptr) = self.variables.get(name).copied() {
             let heap_ptr = self
                 .builder
-                .build_load(self.ptr_type(), ptr, &format!("{}_ptr", name))
+                .build_load(self.ptr_type(), ptr, "vptr")
                 .unwrap()
                 .into_pointer_value();
             let free_fn = self.module.get_function("free").unwrap();
@@ -148,7 +146,8 @@ impl<'ctx> Codegen<'ctx> {
             Expr::Call { name, .. } => self
                 .fn_return_tys
                 .get(name)
-                .and_then(|opt| opt.clone())
+                .and_then(|opt| opt.as_ref())
+                .cloned()
                 .unwrap_or(Ty::Int),
             Expr::ArrayLit(elems) => {
                 if elems.is_empty() {
@@ -177,7 +176,8 @@ impl<'ctx> Codegen<'ctx> {
                     let fn_name = format!("{}.{}", sname, method);
                     self.fn_return_tys
                         .get(&fn_name)
-                        .and_then(|opt| opt.clone())
+                        .and_then(|opt| opt.as_ref())
+                        .cloned()
                         .unwrap_or(Ty::Int)
                 } else {
                     Ty::Int

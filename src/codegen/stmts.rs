@@ -76,7 +76,7 @@ impl<'ctx> Codegen<'ctx> {
                 };
                 let heap_ptr = self
                     .builder
-                    .build_call(malloc, &[size_val.into()], &format!("{}_heap", name))
+                    .build_call(malloc, &[size_val.into()], "vault_heap")
                     .unwrap()
                     .try_as_basic_value()
                     .basic()
@@ -84,21 +84,15 @@ impl<'ctx> Codegen<'ctx> {
                     .into_pointer_value();
 
                 // NULL 체크 (C03)
-                self.emit_null_check(heap_ptr, &format!("vault_{}", name));
+                self.emit_null_check(heap_ptr, name);
 
                 // 값 계산 후 heap에 저장
                 let val = self.compile_expr(value, params);
                 let val = self.coerce_to_ty(val, ty);
                 self.builder.build_store(heap_ptr, val).unwrap();
 
-                // 변수는 힙 포인터를 저장하는 alloca (pointer 타입으
-                let entry = self.current_fn.unwrap().get_first_basic_block().unwrap();
-                let temp_builder = self.context.create_builder();
-                match entry.get_first_instruction() {
-                    Some(inst) => temp_builder.position_before(&inst),
-                    None => temp_builder.position_at_end(entry),
-                }
-                let alloca = temp_builder.build_alloca(self.ptr_type(), name).unwrap();
+                // 변수는 힙 포인터를 저장하는 alloca (pointer 타입)
+                let alloca = self.build_alloca(name, &Ty::String); // ptr size
                 self.builder.build_store(alloca, heap_ptr).unwrap();
                 self.variables.insert(name.clone(), alloca);
                 self.var_types.insert(name.clone(), ty.clone());
@@ -154,11 +148,7 @@ impl<'ctx> Codegen<'ctx> {
                     if let Some((idx, field_ty)) = self.struct_field_info(&sname, field) {
                         let base_ptr = if self.vault_vars.contains(name) {
                             self.builder
-                                .build_load(
-                                    self.ptr_type(),
-                                    self.variables[name],
-                                    &format!("{}_ptr", name),
-                                )
+                                .build_load(self.ptr_type(), self.variables[name], "vptr")
                                 .unwrap()
                                 .into_pointer_value()
                         } else {

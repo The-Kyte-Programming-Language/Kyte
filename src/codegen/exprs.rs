@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 
@@ -62,11 +60,8 @@ impl<'ctx> Codegen<'ctx> {
             Expr::Call { name, args } => {
                 // len() 빌트인
                 if name == "len" {
-                    if let Some(arg_name) = match &args[0] {
-                        Expr::Ident(n) => Some(n.clone()),
-                        _ => None,
-                    } {
-                        let len = self.array_lengths.get(&arg_name).copied().unwrap_or(0);
+                    if let Expr::Ident(arg_name) = &args[0] {
+                        let len = self.array_lengths.get(arg_name.as_str()).copied().unwrap_or(0);
                         return self.i64_type().const_int(len, false).into();
                     }
                     return self.i64_type().const_int(0, false).into();
@@ -113,7 +108,7 @@ impl<'ctx> Codegen<'ctx> {
                     .collect();
                 let call_site = self
                     .builder
-                    .build_call(func, &compiled_args, &format!("{}_ret", name))
+                    .build_call(func, &compiled_args, "ret")
                     .unwrap();
                 call_site
                     .try_as_basic_value()
@@ -132,7 +127,7 @@ impl<'ctx> Codegen<'ctx> {
                                 .collect();
                             let call_site = self
                                 .builder
-                                .build_call(func, &compiled_args, &format!("{}_ret", qualified))
+                                .build_call(func, &compiled_args, "ret")
                                 .unwrap();
                             return call_site
                                 .try_as_basic_value()
@@ -151,7 +146,7 @@ impl<'ctx> Codegen<'ctx> {
                         }
                         let call_site = self
                             .builder
-                            .build_call(func, &compiled_args, &format!("{}_ret", fn_name))
+                            .build_call(func, &compiled_args, "ret")
                             .unwrap();
                         return call_site
                             .try_as_basic_value()
@@ -192,23 +187,20 @@ impl<'ctx> Codegen<'ctx> {
                 };
                 // 런타임 배열 범위 검사 (C04)
                 let arr_name = if let Expr::Ident(n) = array.as_ref() {
-                    Some(n.clone())
+                    Some(n.as_str())
                 } else {
                     None
                 };
                 let data_ptr = self.compile_expr(array, params).into_pointer_value();
                 let idx = self.compile_expr(index, params).into_int_value();
-                let display_name = arr_name.as_deref().unwrap_or("<expr>");
-                if let Some(ref n) = arr_name {
+                if let Some(n) = arr_name {
                     if let Some(&arr_len) = self.array_lengths.get(n) {
                         self.emit_bounds_check(idx, arr_len, n);
                     } else {
-                        // 길이를 모르는 배열: 음수 인덱스만 검사
-                        self.emit_negative_index_check(idx, display_name);
+                        self.emit_negative_index_check(idx, n);
                     }
                 } else {
-                    // 이름 없는 배열 표현식: 음수 인덱스 검사
-                    self.emit_negative_index_check(idx, display_name);
+                    self.emit_negative_index_check(idx, "<expr>");
                 }
                 let elem_llvm_ty = self.elem_llvm_type(&inner);
                 let gep = unsafe {
@@ -232,22 +224,26 @@ impl<'ctx> Codegen<'ctx> {
             Expr::StructInit { name, fields } => {
                 let st = self.struct_types[name];
                 let mut agg = st.get_undef();
-                if let Some(defs) = self.struct_defs.get(name).cloned() {
-                    for (idx, df) in defs.iter().enumerate() {
-                        let value = if let Some((_, expr)) =
-                            fields.iter().find(|(fname, _)| *fname == df.name)
-                        {
-                            let v = self.compile_expr(expr, params);
-                            self.coerce_to_ty(v, &df.ty)
-                        } else {
-                            self.ty_to_basic(&df.ty).const_zero()
-                        };
-                        agg = self
-                            .builder
-                            .build_insert_value(agg, value, idx as u32, "struct_set")
-                            .unwrap()
-                            .into_struct_value();
-                    }
+                // Collect only (name, ty) pairs to avoid cloning StructField and release borrow
+                let field_info: Vec<(String, Ty)> = self
+                    .struct_defs
+                    .get(name)
+                    .map(|defs| defs.iter().map(|f| (f.name.clone(), f.ty.clone())).collect())
+                    .unwrap_or_default();
+                for (idx, (fname, fty)) in field_info.iter().enumerate() {
+                    let value = if let Some((_, expr)) =
+                        fields.iter().find(|(n, _)| n == fname)
+                    {
+                        let v = self.compile_expr(expr, params);
+                        self.coerce_to_ty(v, fty)
+                    } else {
+                        self.ty_to_basic(fty).const_zero()
+                    };
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, value, idx as u32, "sset")
+                        .unwrap()
+                        .into_struct_value();
                 }
                 agg.into()
             }
@@ -327,18 +323,16 @@ impl<'ctx> Codegen<'ctx> {
                 self.functions.insert(cl_name.clone(), cl_fn);
                 self.fn_return_tys.insert(cl_name.clone(), Some(Ty::Int));
 
-                // 현재 상태 저장
+                // 현재 상태 저장 (clone 없이 swap)
                 let saved_fn = self.current_fn;
-                let saved_vars = self.variables.clone();
-                let saved_var_types = self.var_types.clone();
                 let saved_bb = self.builder.get_insert_block();
+                let mut saved_vars = std::mem::take(&mut self.variables);
+                let mut saved_var_types = std::mem::take(&mut self.var_types);
 
                 // 클로저 함수 본문 빌드
                 let entry_bb = self.context.append_basic_block(cl_fn, "entry");
                 self.builder.position_at_end(entry_bb);
                 self.current_fn = Some(cl_fn);
-                self.variables = HashMap::new();
-                self.var_types = HashMap::new();
 
                 for (i, (param_name, opt_ty)) in cl_params.iter().enumerate() {
                     let ty = opt_ty.as_ref().cloned().unwrap_or(Ty::Int);
@@ -357,10 +351,10 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap();
                 }
 
-                // 상태 복원
+                // 상태 복원 (swap — drop 없이 재사용)
                 self.current_fn = saved_fn;
-                self.variables = saved_vars;
-                self.var_types = saved_var_types;
+                std::mem::swap(&mut self.variables, &mut saved_vars);
+                std::mem::swap(&mut self.var_types, &mut saved_var_types);
                 if let Some(bb) = saved_bb {
                     self.builder.position_at_end(bb);
                 }

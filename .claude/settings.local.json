@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(rtk git *)",
+      "Bash(rtk tree *)",
+      "Bash(rtk wc *)",
+      "Bash(rtk cargo *)",
+      "Bash(rtk grep *)",
+      "Bash(cargo run *)",
+      "Bash(rtk read *)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(python3 -c ' *)",
+      "Bash(dumpbin /symbols examples/src/anchor_restart.o)",
+      "Bash(llvm-nm examples/src/anchor_restart.o)",
+      "Bash(nm examples/src/anchor_restart.o)",
+      "PowerShell(& \"examples\\\\src\\\\anchor_restart.exe\" 2>&1; Write-Host \"Exit: $LASTEXITCODE\")"
+    ]
+  }
+}

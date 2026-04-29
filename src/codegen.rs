@@ -65,6 +65,10 @@ pub struct Codegen<'ctx> {
     /// Kill 시 점프할 복구 블록 스택 (anchor recovery)
     recovery_stack: Vec<BasicBlock<'ctx>>,
 
+    /// 복구 후 재시작할 앵커 루프 헤더 블록 스택 (recovery_stack과 1:1)
+    /// Kill → recovery_bb → emit_recovery_vault_assert → restart_bb (루프 재진입)
+    anchor_restart_bb_stack: Vec<BasicBlock<'ctx>>,
+
     /// recovery_stack과 1:1 대응되는 Vault cleanup depth
     kill_cleanup_depth_stack: Vec<usize>,
 
@@ -128,6 +132,7 @@ impl<'ctx> Codegen<'ctx> {
             break_cleanup_depth: None,
             break_bb: None,
             recovery_stack: Vec::new(),
+            anchor_restart_bb_stack: Vec::new(),
             kill_cleanup_depth_stack: Vec::new(),
             yield_slot: Vec::new(),
             yield_merge_bb: Vec::new(),

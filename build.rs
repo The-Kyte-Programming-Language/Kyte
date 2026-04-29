@@ -1,4 +1,14 @@
 fn main() {
+    // ── Kyte runtime library ───────────────────────────────────────────────
+    // kyte_rt.c provides signal handling, anchor supervision, and thread
+    // management that the compiled Kyte programs link against at runtime.
+    cc::Build::new()
+        .file("kyte_rt/kyte_rt.c")
+        .flag_if_supported("-O2")
+        .flag_if_supported("-fno-omit-frame-pointer") // better stack traces
+        .compile("kyte_rt");
+
+    // ── LLVM target stubs ─────────────────────────────────────────────────
     // inkwell 0.8.0 compiles initialization functions for ALL LLVM targets,
     // but our LLVM installation may only have a subset of targets.
     // Generate C stubs for missing target initialization symbols.

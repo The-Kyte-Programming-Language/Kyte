@@ -1,0 +1,12 @@
+@main(main) {
+    int attempt = 0;
+    attempt += 1;
+
+    print(attempt);
+
+    if attempt < 3 {
+        Kill "simulating failure";
+    }
+
+    print("anchor reached stable state after restarts");
+}

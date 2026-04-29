@@ -367,6 +367,8 @@ impl Analyzer {
                         "Add a 'break;' statement or use 'while cond { }' instead".to_string(),
                     );
                 }
+                // E050: Vault 할당은 루프 내에서 허용되지 않음 (메모리 누수 위험)
+                self.check_vault_in_loop(body, "loop");
                 self.check_scoped_block(body, scope, return_ty, true);
             }
             Stmt::While { cond, body } => {
@@ -380,11 +382,15 @@ impl Analyzer {
                         );
                     }
                 }
+                // E050: Vault 할당은 루프 내에서 허용되지 않음
+                self.check_vault_in_loop(body, "while");
                 self.check_scoped_block(body, scope, return_ty, true);
             }
             Stmt::For { from, to, body, .. } => {
                 self.infer_expr(from, scope);
                 self.infer_expr(to, scope);
+                // E050: Vault 할당은 루프 내에서 허용되지 않음
+                self.check_vault_in_loop(body, "for");
                 let mut for_scope_log = Vec::new();
                 self.collect_decl_with_log(stmt, scope, &mut for_scope_log);
                 self.check_scoped_block(body, scope, return_ty, true);
@@ -513,6 +519,48 @@ impl Analyzer {
                     },
                 );
                 self.infer_expr(value, scope);
+            }
+        }
+    }
+
+    // ── Vault-in-loop detection ────────────────────────────────────────────────
+
+    /// E050: Vault 할당이 루프 내에 있으면 컴파일 오류.
+    ///
+    /// 루프마다 새로운 힙 메모리를 할당하지만, 루프 종료 시 자동 해제 스코프가
+    /// 올바르게 발생하지 않을 수 있어 메모리 누수가 발생합니다.
+    /// 루프 외부에서 Vault를 선언하거나, 루프 내에서 명시적으로 free()를 사용하세요.
+    pub(super) fn check_vault_in_loop(&mut self, body: &[(Stmt, Span)], loop_kind: &str) {
+        for (stmt, _span) in body {
+            if let Stmt::VaultDecl { name, .. } = stmt {
+                self.err(
+                    "E050",
+                    format!(
+                        "Vault '{}' allocated inside '{}' loop — potential memory accumulation",
+                        name, loop_kind
+                    ),
+                    format!(
+                        "Move 'Vault {}' outside the loop, or restructure to avoid repeated heap allocation",
+                        name
+                    ),
+                );
+            }
+            // Recurse into nested non-loop blocks (if/else bodies)
+            // but NOT into inner loops (they will self-check) or anchors
+            match stmt {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    self.check_vault_in_loop(then_body, loop_kind);
+                    if let Some(eb) = else_body {
+                        self.check_vault_in_loop(eb, loop_kind);
+                    }
+                }
+                // Do NOT recurse into nested loops (they check themselves)
+                // or InlineAnchor (separate supervision domain)
+                _ => {}
             }
         }
     }

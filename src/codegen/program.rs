@@ -5,6 +5,53 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use super::Codegen;
 use crate::ast::*;
 
+// ── Helper: collect Vault variable names declared in a body ──────────────────
+
+fn collect_vault_names(stmts: &[(Stmt, Span)]) -> Vec<String> {
+    let mut names = Vec::new();
+    for (stmt, _) in stmts {
+        collect_vault_names_stmt(stmt, &mut names);
+    }
+    names
+}
+
+fn collect_vault_names_stmt(stmt: &Stmt, out: &mut Vec<String>) {
+    match stmt {
+        Stmt::VaultDecl { name, .. } => out.push(name.clone()),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for (s, _) in then_body {
+                collect_vault_names_stmt(s, out);
+            }
+            if let Some(eb) = else_body {
+                for (s, _) in eb {
+                    collect_vault_names_stmt(s, out);
+                }
+            }
+        }
+        Stmt::Loop(body) | Stmt::While { body, .. } => {
+            for (s, _) in body {
+                collect_vault_names_stmt(s, out);
+            }
+        }
+        Stmt::For { body, .. } => {
+            for (s, _) in body {
+                collect_vault_names_stmt(s, out);
+            }
+        }
+        Stmt::InlineAnchor { body, .. } => {
+            // Do NOT recurse into child anchors — they manage their own Vaults
+            let _ = body;
+        }
+        _ => {}
+    }
+}
+
+// ── Main compile entry ───────────────────────────────────────────────────────
+
 impl<'ctx> Codegen<'ctx> {
     pub fn compile(&mut self, program: &Program) {
         self.declare_printf();
@@ -14,6 +61,7 @@ impl<'ctx> Codegen<'ctx> {
         self.declare_malloc();
         self.declare_free_fn();
         self.declare_strcmp();
+        self.declare_kyte_runtime();
 
         // 0단계: struct/enum 타입 선언/본문 설정
         for (item, _) in &program.items {
@@ -65,7 +113,6 @@ impl<'ctx> Codegen<'ctx> {
                     .module
                     .add_global(llvm_ty.as_basic_type_enum(), None, name);
                 global.set_constant(true);
-                // 간단한 상수 표현식만 지원 (리터럴)
                 let init_val: inkwell::values::BasicValueEnum = match value {
                     Expr::IntLit(n) => {
                         let it = self.ty_to_int_type(ty);
@@ -104,7 +151,6 @@ impl<'ctx> Codegen<'ctx> {
                 self.functions.insert(name.clone(), func);
                 self.fn_return_tys.insert(name.clone(), return_ty.clone());
             }
-            // impl 블록의 메서드를 TraitName_TypeName_method 로 등록
             if let TopLevel::Impl {
                 trait_name,
                 target_ty,
@@ -132,7 +178,6 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
-            // mod 블록의 함수를 modname_funcname 으로 등록
             if let TopLevel::Module {
                 name: modname,
                 items: mod_items,
@@ -163,7 +208,6 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         // 2단계: 함수 본문 생성
-        // helper closure — compile a function body given qualified name + TopLevel::Function
         struct FnToCompile<'a> {
             name: String,
             params: &'a Vec<Param>,
@@ -248,10 +292,10 @@ impl<'ctx> Codegen<'ctx> {
             self.freed_vault_vars.clear();
             self.break_cleanup_depth = None;
             self.kill_cleanup_depth_stack.clear();
+            self.anchor_restart_bb_stack.clear();
             let entry = self.context.append_basic_block(func, "entry");
             self.builder.position_at_end(entry);
 
-            // Vault 런타임 카운터 초기화
             let vlc = self.build_alloca("vault_live_count", &Ty::I64);
             self.builder
                 .build_store(vlc, self.i64_type().const_int(0, false))
@@ -271,7 +315,6 @@ impl<'ctx> Codegen<'ctx> {
 
             self.compile_stmts(body, params);
 
-            // 암시적 반환
             if self.no_terminator() {
                 match return_ty {
                     None => {
@@ -317,18 +360,28 @@ impl<'ctx> Codegen<'ctx> {
                 self.freed_vault_vars.clear();
                 self.break_cleanup_depth = None;
                 self.kill_cleanup_depth_stack.clear();
+                self.anchor_restart_bb_stack.clear();
+
+                // ── entry block: one-time setup ──────────────────────────────
                 let entry = self.context.append_basic_block(main_fn, "entry");
+                let main_loop = self.context.append_basic_block(main_fn, "main_loop");
                 let main_recover = self.context.append_basic_block(main_fn, "recover_main");
                 let main_after = self.context.append_basic_block(main_fn, "after_main");
+
                 self.builder.position_at_end(entry);
 
-                // Vault 런타임 카운터 초기화
+                // Install signal handlers once at program start.
+                let install_sig = self.module.get_function("kyte_install_signals").unwrap();
+                self.builder.build_call(install_sig, &[], "").unwrap();
+
+                // Vault live counter
                 let vlc = self.build_alloca("vault_live_count", &Ty::I64);
                 self.builder
                     .build_store(vlc, self.i64_type().const_int(0, false))
                     .unwrap();
                 self.vault_live_count = Some(vlc);
 
+                // Per-anchor slots (allocated once, persist across restarts)
                 let main_yield = self.build_alloca("main_yield", &Ty::I64);
                 self.builder
                     .build_store(main_yield, self.i64_type().const_int(0, false))
@@ -338,161 +391,124 @@ impl<'ctx> Codegen<'ctx> {
                     .build_store(main_kill_count, self.i64_type().const_int(0, false))
                     .unwrap();
 
+                // Pre-null the Vault pointer allocas for all Vaults in the
+                // main body.  This ensures cleanup-before-VaultDecl is safe
+                // on restarts.
+                let main_vault_names = collect_vault_names(body);
+
+                // We can't allocate these here (we haven't scanned the body
+                // yet), but we will emit the null-store at main_loop entry.
+                // For now, fall through to main_loop.
+                self.builder.build_unconditional_branch(main_loop).unwrap();
+
+                // ── main_loop: anchor restart target ─────────────────────────
+                self.builder.position_at_end(main_loop);
+
+                // Call kyte_anchor_enter() — sigsetjmp wrapper.
+                // Returns 0 on fresh entry, signal# on signal recovery.
+                let enter_fn = self.module.get_function("kyte_anchor_enter").unwrap();
+                let jmp_ret = self
+                    .builder
+                    .build_call(enter_fn, &[], "jmp_ret")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .basic()
+                    .unwrap()
+                    .into_int_value();
+
+                // Check: if signal recovery, treat as Kill (go to recover)
+                let jmp_is_signal = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        jmp_ret,
+                        self.context.i32_type().const_int(0, false),
+                        "signal_caught",
+                    )
+                    .unwrap();
+                let body_start_bb =
+                    self.context.append_basic_block(main_fn, "main_body_start");
+                self.builder
+                    .build_conditional_branch(jmp_is_signal, main_recover, body_start_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_start_bb);
+
+                // Push recovery context onto supervisor stacks
                 self.recovery_stack.push(main_recover);
+                self.anchor_restart_bb_stack.push(main_loop);
                 self.kill_cleanup_depth_stack
                     .push(self.vault_scope_stack.len());
                 self.yield_slot.push(main_yield);
                 self.yield_merge_bb.push(main_after);
                 self.kill_count_slot.push(main_kill_count);
 
+                // Null-initialize Vault ptr allocas that haven't been touched
+                // yet (important on restarts so cleanup doesn't free garbage).
+                for vname in &main_vault_names {
+                    if let Some(&ptr) = self.variables.get(vname) {
+                        self.builder
+                            .build_store(ptr, self.ptr_type().const_null())
+                            .unwrap();
+                    }
+                }
+
                 let main_exp_vaults = self.save_vault_count("main");
 
                 self.compile_stmts(body, &[]);
 
-                // 자식 앵커 본문도 인라인 (recovery 블록 포함)
+                // ── child anchors (non-thread) ────────────────────────────────
                 for (child, _) in children {
                     if let TopLevel::Anchor {
                         name: child_name,
+                        kind: child_kind,
                         body: child_body,
                         children: grandchildren,
-                        ..
                     } = child
                     {
-                        let func = self.current_fn.unwrap();
-                        let child_bb = self
-                            .context
-                            .append_basic_block(func, &format!("anchor_{}", child_name));
-                        let child_recover = self
-                            .context
-                            .append_basic_block(func, &format!("recover_{}", child_name));
-                        let child_merge = self
-                            .context
-                            .append_basic_block(func, &format!("after_{}", child_name));
-
-                        let yield_alloca =
-                            self.build_alloca(&format!("{}_yield", child_name), &Ty::I64);
-                        self.builder
-                            .build_store(yield_alloca, self.i64_type().const_int(0, false))
-                            .unwrap();
-                        let kill_count_alloca =
-                            self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
-                        self.builder
-                            .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
-                            .unwrap();
-
-                        self.builder.build_unconditional_branch(child_bb).unwrap();
-                        self.builder.position_at_end(child_bb);
-
-                        self.recovery_stack.push(child_recover);
-                        self.kill_cleanup_depth_stack
-                            .push(self.vault_scope_stack.len());
-                        self.yield_slot.push(yield_alloca);
-                        self.yield_merge_bb.push(child_merge);
-                        self.kill_count_slot.push(kill_count_alloca);
-
-                        let child_exp_vaults = self.save_vault_count(child_name);
-
-                        self.compile_stmts(child_body, &[]);
-
-                        for (gc, _) in grandchildren {
-                            if let TopLevel::Anchor {
-                                name: gc_name,
-                                body: gc_body,
-                                ..
-                            } = gc
-                            {
-                                if self.no_terminator() {
-                                    let func = self.current_fn.unwrap();
-                                    let gc_bb = self
-                                        .context
-                                        .append_basic_block(func, &format!("anchor_{}", gc_name));
-                                    let gc_recover = self
-                                        .context
-                                        .append_basic_block(func, &format!("recover_{}", gc_name));
-                                    let gc_merge = self
-                                        .context
-                                        .append_basic_block(func, &format!("after_{}", gc_name));
-
-                                    let gc_yield =
-                                        self.build_alloca(&format!("{}_yield", gc_name), &Ty::I64);
-                                    self.builder
-                                        .build_store(gc_yield, self.i64_type().const_int(0, false))
-                                        .unwrap();
-                                    let gc_kill_count = self
-                                        .build_alloca(&format!("{}_kill_count", gc_name), &Ty::I64);
-                                    self.builder
-                                        .build_store(
-                                            gc_kill_count,
-                                            self.i64_type().const_int(0, false),
-                                        )
-                                        .unwrap();
-
-                                    self.builder.build_unconditional_branch(gc_bb).unwrap();
-                                    self.builder.position_at_end(gc_bb);
-
-                                    self.recovery_stack.push(gc_recover);
-                                    self.kill_cleanup_depth_stack
-                                        .push(self.vault_scope_stack.len());
-                                    self.yield_slot.push(gc_yield);
-                                    self.yield_merge_bb.push(gc_merge);
-                                    self.kill_count_slot.push(gc_kill_count);
-
-                                    let gc_exp_vaults = self.save_vault_count(gc_name);
-
-                                    self.compile_stmts(gc_body, &[]);
-
-                                    if self.no_terminator() {
-                                        self.builder.build_unconditional_branch(gc_merge).unwrap();
-                                    }
-                                    self.builder.position_at_end(gc_recover);
-                                    self.emit_recovery_vault_assert(
-                                        gc_merge,
-                                        gc_exp_vaults,
-                                        gc_name,
-                                    );
-
-                                    self.recovery_stack.pop();
-                                    self.kill_cleanup_depth_stack.pop();
-                                    self.yield_slot.pop();
-                                    self.yield_merge_bb.pop();
-                                    self.kill_count_slot.pop();
-
-                                    self.builder.position_at_end(gc_merge);
-                                }
+                        match child_kind {
+                            AnchorKind::Thread => {
+                                // @child(thread) — spawn a supervised OS thread.
+                                self.emit_thread_anchor(child_name, child_body, grandchildren);
+                            }
+                            _ => {
+                                // Inline child anchor with restart loop.
+                                self.emit_child_anchor(
+                                    child_name,
+                                    child_body,
+                                    grandchildren,
+                                    &[],
+                                );
                             }
                         }
-
-                        if self.no_terminator() {
-                            self.builder
-                                .build_unconditional_branch(child_merge)
-                                .unwrap();
-                        }
-                        self.builder.position_at_end(child_recover);
-                        self.emit_recovery_vault_assert(child_merge, child_exp_vaults, child_name);
-
-                        self.recovery_stack.pop();
-                        self.kill_cleanup_depth_stack.pop();
-                        self.yield_slot.pop();
-                        self.yield_merge_bb.pop();
-                        self.kill_count_slot.pop();
-
-                        self.builder.position_at_end(child_merge);
                     }
                 }
 
+                // Normal completion → after
                 if self.no_terminator() {
                     self.builder.build_unconditional_branch(main_after).unwrap();
                 }
-                self.builder.position_at_end(main_recover);
-                self.emit_recovery_vault_assert(main_after, main_exp_vaults, "main");
 
+                // ── recovery block: Kill lands here ───────────────────────────
+                self.builder.position_at_end(main_recover);
+                // On recovery, call kyte_anchor_exit to pop the sigsetjmp slot
+                // (kyte_anchor_enter already decremented depth on longjmp return,
+                //  so we do NOT double-pop here — the C side handles it).
+                self.emit_recovery_vault_assert(main_loop, main_exp_vaults, "main");
+
+                // Pop supervisor stacks after recovery block is fully emitted.
                 self.recovery_stack.pop();
+                self.anchor_restart_bb_stack.pop();
                 self.kill_cleanup_depth_stack.pop();
                 self.yield_slot.pop();
                 self.yield_merge_bb.pop();
                 self.kill_count_slot.pop();
 
+                // ── after_main ────────────────────────────────────────────────
                 self.builder.position_at_end(main_after);
+
+                // Pop signal recovery slot on clean exit.
+                let exit_fn = self.module.get_function("kyte_anchor_exit").unwrap();
+                self.builder.build_call(exit_fn, &[], "").unwrap();
 
                 if self.no_terminator() {
                     self.builder
@@ -500,6 +516,309 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap();
                 }
             }
+        }
+    }
+
+    // ── Inline child anchor (with restart loop) ──────────────────────────────
+
+    pub(super) fn emit_child_anchor(
+        &mut self,
+        child_name: &str,
+        child_body: &[(Stmt, Span)],
+        grandchildren: &[(TopLevel, Span)],
+        params: &[Param],
+    ) {
+        if !self.no_terminator() {
+            return;
+        }
+        let func = self.current_fn.unwrap();
+
+        let child_loop = self
+            .context
+            .append_basic_block(func, &format!("anchor_loop_{}", child_name));
+        let child_recover = self
+            .context
+            .append_basic_block(func, &format!("recover_{}", child_name));
+        let child_after = self
+            .context
+            .append_basic_block(func, &format!("after_{}", child_name));
+
+        let yield_alloca = self.build_alloca(&format!("{}_yield", child_name), &Ty::I64);
+        self.builder
+            .build_store(yield_alloca, self.i64_type().const_int(0, false))
+            .unwrap();
+        let kill_count_alloca =
+            self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
+        self.builder
+            .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
+            .unwrap();
+
+        // Jump into the loop
+        self.builder.build_unconditional_branch(child_loop).unwrap();
+        self.builder.position_at_end(child_loop);
+
+        // sigsetjmp at child anchor entry
+        let enter_fn = self.module.get_function("kyte_anchor_enter").unwrap();
+        let jmp_ret = self
+            .builder
+            .build_call(enter_fn, &[], &format!("{}_jmp", child_name))
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .unwrap()
+            .into_int_value();
+        let jmp_signal = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                jmp_ret,
+                self.context.i32_type().const_int(0, false),
+                &format!("{}_sig", child_name),
+            )
+            .unwrap();
+        let body_start =
+            self.context
+                .append_basic_block(func, &format!("body_{}", child_name));
+        self.builder
+            .build_conditional_branch(jmp_signal, child_recover, body_start)
+            .unwrap();
+        self.builder.position_at_end(body_start);
+
+        self.recovery_stack.push(child_recover);
+        self.anchor_restart_bb_stack.push(child_loop);
+        self.kill_cleanup_depth_stack
+            .push(self.vault_scope_stack.len());
+        self.yield_slot.push(yield_alloca);
+        self.yield_merge_bb.push(child_after);
+        self.kill_count_slot.push(kill_count_alloca);
+
+        // Null-init Vault allocas for clean restart
+        let child_vault_names = collect_vault_names(child_body);
+        for vname in &child_vault_names {
+            if let Some(&ptr) = self.variables.get(vname) {
+                self.builder
+                    .build_store(ptr, self.ptr_type().const_null())
+                    .unwrap();
+            }
+        }
+
+        let child_exp_vaults = self.save_vault_count(child_name);
+        self.compile_stmts(child_body, params);
+
+        // Grandchildren
+        for (gc, _) in grandchildren {
+            if let TopLevel::Anchor {
+                name: gc_name,
+                kind: gc_kind,
+                body: gc_body,
+                children: gc_children,
+            } = gc
+            {
+                match gc_kind {
+                    AnchorKind::Thread => {
+                        self.emit_thread_anchor(gc_name, gc_body, gc_children);
+                    }
+                    _ => {
+                        self.emit_child_anchor(gc_name, gc_body, gc_children, params);
+                    }
+                }
+            }
+        }
+
+        if self.no_terminator() {
+            self.builder
+                .build_unconditional_branch(child_after)
+                .unwrap();
+        }
+
+        // Recovery → restart child loop
+        self.builder.position_at_end(child_recover);
+        self.emit_recovery_vault_assert(child_loop, child_exp_vaults, child_name);
+
+        self.recovery_stack.pop();
+        self.anchor_restart_bb_stack.pop();
+        self.kill_cleanup_depth_stack.pop();
+        self.yield_slot.pop();
+        self.yield_merge_bb.pop();
+        self.kill_count_slot.pop();
+
+        // Pop signal slot on clean exit
+        self.builder.position_at_end(child_after);
+        let exit_fn = self.module.get_function("kyte_anchor_exit").unwrap();
+        self.builder.build_call(exit_fn, &[], "").unwrap();
+    }
+
+    // ── Thread anchor: spawn supervised OS thread ─────────────────────────────
+
+    pub(super) fn emit_thread_anchor(
+        &mut self,
+        anchor_name: &str,
+        body: &[(Stmt, Span)],
+        _children: &[(TopLevel, Span)],
+    ) {
+        if !self.no_terminator() {
+            return;
+        }
+
+        // Create a dedicated LLVM function for the anchor body.
+        // Signature: void anchor_<name>(void*) — called by the C supervisor.
+        let body_fn_name = format!("__kyte_thread_{}", anchor_name);
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(&[self.ptr_type().into()], false);
+        let body_fn = self.module.add_function(&body_fn_name, fn_type, None);
+
+        // Save outer codegen state
+        let outer_fn = self.current_fn;
+        let outer_vars = self.variables.clone();
+        let outer_types = self.var_types.clone();
+        let outer_vault_stack = self.vault_scope_stack.clone();
+        let outer_freed = self.freed_vault_vars.clone();
+        let outer_vlc = self.vault_live_count;
+        let outer_recovery = std::mem::take(&mut self.recovery_stack);
+        let outer_restart = std::mem::take(&mut self.anchor_restart_bb_stack);
+        let outer_kill_depth = std::mem::take(&mut self.kill_cleanup_depth_stack);
+        let outer_yield_slot = std::mem::take(&mut self.yield_slot);
+        let outer_yield_merge = std::mem::take(&mut self.yield_merge_bb);
+        let outer_kill_count = std::mem::take(&mut self.kill_count_slot);
+        let outer_break_bb = self.break_bb;
+        let outer_break_depth = self.break_cleanup_depth;
+
+        // Set up the thread body function
+        self.current_fn = Some(body_fn);
+        self.variables.clear();
+        self.var_types.clear();
+        self.vault_scope_stack.clear();
+        self.freed_vault_vars.clear();
+        self.break_bb = None;
+        self.break_cleanup_depth = None;
+
+        let entry = self.context.append_basic_block(body_fn, "entry");
+        let thread_loop = self
+            .context
+            .append_basic_block(body_fn, "thread_anchor_loop");
+        let thread_recover = self
+            .context
+            .append_basic_block(body_fn, "thread_recover");
+        let thread_after = self.context.append_basic_block(body_fn, "thread_after");
+
+        self.builder.position_at_end(entry);
+
+        let vlc = self.build_alloca("vault_live_count", &Ty::I64);
+        self.builder
+            .build_store(vlc, self.i64_type().const_int(0, false))
+            .unwrap();
+        self.vault_live_count = Some(vlc);
+
+        let yield_alloca =
+            self.build_alloca(&format!("{}_yield", anchor_name), &Ty::I64);
+        self.builder
+            .build_store(yield_alloca, self.i64_type().const_int(0, false))
+            .unwrap();
+        let kill_count_alloca =
+            self.build_alloca(&format!("{}_kill_count", anchor_name), &Ty::I64);
+        self.builder
+            .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
+            .unwrap();
+
+        self.builder
+            .build_unconditional_branch(thread_loop)
+            .unwrap();
+
+        // Thread loop (restart target)
+        self.builder.position_at_end(thread_loop);
+
+        let enter_fn = self.module.get_function("kyte_anchor_enter").unwrap();
+        let jmp_ret = self
+            .builder
+            .build_call(enter_fn, &[], "th_jmp")
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .unwrap()
+            .into_int_value();
+        let jmp_sig = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                jmp_ret,
+                self.context.i32_type().const_int(0, false),
+                "th_sig",
+            )
+            .unwrap();
+        let body_start = self
+            .context
+            .append_basic_block(body_fn, "thread_body_start");
+        self.builder
+            .build_conditional_branch(jmp_sig, thread_recover, body_start)
+            .unwrap();
+        self.builder.position_at_end(body_start);
+
+        self.recovery_stack.push(thread_recover);
+        self.anchor_restart_bb_stack.push(thread_loop);
+        self.kill_cleanup_depth_stack
+            .push(self.vault_scope_stack.len());
+        self.yield_slot.push(yield_alloca);
+        self.yield_merge_bb.push(thread_after);
+        self.kill_count_slot.push(kill_count_alloca);
+
+        let exp_vaults = self.save_vault_count(anchor_name);
+        self.compile_stmts(body, &[]);
+
+        if self.no_terminator() {
+            self.builder
+                .build_unconditional_branch(thread_after)
+                .unwrap();
+        }
+
+        // Recovery → restart thread loop
+        self.builder.position_at_end(thread_recover);
+        self.emit_recovery_vault_assert(thread_loop, exp_vaults, anchor_name);
+
+        self.recovery_stack.pop();
+        self.anchor_restart_bb_stack.pop();
+        self.kill_cleanup_depth_stack.pop();
+        self.yield_slot.pop();
+        self.yield_merge_bb.pop();
+        self.kill_count_slot.pop();
+
+        self.builder.position_at_end(thread_after);
+        let exit_fn_rt = self.module.get_function("kyte_anchor_exit").unwrap();
+        self.builder.build_call(exit_fn_rt, &[], "").unwrap();
+        self.builder.build_return(None).unwrap();
+
+        // Restore outer state
+        self.current_fn = outer_fn;
+        self.variables = outer_vars;
+        self.var_types = outer_types;
+        self.vault_scope_stack = outer_vault_stack;
+        self.freed_vault_vars = outer_freed;
+        self.vault_live_count = outer_vlc;
+        self.recovery_stack = outer_recovery;
+        self.anchor_restart_bb_stack = outer_restart;
+        self.kill_cleanup_depth_stack = outer_kill_depth;
+        self.yield_slot = outer_yield_slot;
+        self.yield_merge_bb = outer_yield_merge;
+        self.kill_count_slot = outer_kill_count;
+        self.break_bb = outer_break_bb;
+        self.break_cleanup_depth = outer_break_depth;
+
+        // In the outer function: call kyte_spawn_thread_anchor
+        if self.no_terminator() {
+            let spawn_fn = self
+                .module
+                .get_function("kyte_spawn_thread_anchor")
+                .unwrap();
+            let fn_ptr = body_fn.as_global_value().as_pointer_value();
+            let arg_null = self.ptr_type().const_null();
+            let max_restarts = self.context.i32_type().const_int(3, false);
+            let name_ptr = self.global_string_ptr(anchor_name, &format!("th_name_{}", anchor_name));
+            self.builder
+                .build_call(
+                    spawn_fn,
+                    &[fn_ptr.into(), arg_null.into(), max_restarts.into(), name_ptr.into()],
+                    "",
+                )
+                .unwrap();
         }
     }
 }

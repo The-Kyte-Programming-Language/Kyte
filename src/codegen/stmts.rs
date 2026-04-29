@@ -370,17 +370,21 @@ impl<'ctx> Codegen<'ctx> {
             }
 
             Stmt::Kill(msg) => {
+                // ── Log the kill message ─────────────────────────────────────
                 if let Some(e) = msg {
-                    let val = self.compile_expr(e, params);
+                    // Use kyte_log_kill(anchor_name, message_str) when possible.
+                    // For non-string expressions fall back to print.
                     let ty = self.guess_expr_ty(e, params);
+                    let val = self.compile_expr(e, params);
                     self.emit_print(val, Some(&ty));
                 }
+
                 if let Some(&recovery_bb) = self.recovery_stack.last() {
-                    let normal_depth = self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
-                    // 같은 앵커에서 Kill 3회 이상이면 상위 앵커 복구로 승격
-                    let mut target_bb = recovery_bb;
-                    let mut target_depth = normal_depth;
+                    let normal_depth =
+                        self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
+
                     if let Some(&counter_ptr) = self.kill_count_slot.last() {
+                        // ── Increment kill counter ───────────────────────────
                         let cur = self
                             .builder
                             .build_load(self.i64_type(), counter_ptr, "kill_count")
@@ -396,49 +400,76 @@ impl<'ctx> Codegen<'ctx> {
                             .unwrap();
                         self.builder.build_store(counter_ptr, next).unwrap();
 
+                        // ── Decide: restart or escalate ──────────────────────
+                        let escalate_cond = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::UGE,
+                                next,
+                                self.i64_type().const_int(3, false),
+                                "kill_escalate_cond",
+                            )
+                            .unwrap();
+
+                        let normal_bb = self.context.append_basic_block(
+                            self.current_fn.unwrap(),
+                            "kill_restart",
+                        );
+                        let escalated_bb = self.context.append_basic_block(
+                            self.current_fn.unwrap(),
+                            "kill_escalate",
+                        );
+                        self.builder
+                            .build_conditional_branch(escalate_cond, escalated_bb, normal_bb)
+                            .unwrap();
+
+                        // ── normal_bb: cleanup + restart current anchor ───────
+                        self.builder.position_at_end(normal_bb);
+                        self.cleanup_to_depth(normal_depth);
+                        self.builder
+                            .build_unconditional_branch(recovery_bb)
+                            .unwrap();
+
+                        // ── escalated_bb: escalate to parent or Exit ──────────
+                        self.builder.position_at_end(escalated_bb);
                         if self.recovery_stack.len() >= 2 {
-                            let escalate_bb = self.recovery_stack[self.recovery_stack.len() - 2];
-                            let escalate_depth = self
+                            // Has a parent anchor — escalate to it.
+                            let parent_recovery =
+                                self.recovery_stack[self.recovery_stack.len() - 2];
+                            let parent_depth = self
                                 .kill_cleanup_depth_stack
                                 .get(self.kill_cleanup_depth_stack.len() - 2)
                                 .copied()
                                 .unwrap_or(0);
-                            let escalate_cond = self
-                                .builder
-                                .build_int_compare(
-                                    IntPredicate::UGE,
-                                    next,
-                                    self.i64_type().const_int(3, false),
-                                    "kill_escalate_cond",
+                            // Log the escalation
+                            let log_esc =
+                                self.module.get_function("kyte_log_escalate").unwrap();
+                            let anc_ptr = self.global_string_ptr("anchor", "esc_anc_name");
+                            self.builder
+                                .build_call(log_esc, &[anc_ptr.into()], "")
+                                .unwrap();
+                            self.cleanup_to_depth(parent_depth);
+                            self.builder
+                                .build_unconditional_branch(parent_recovery)
+                                .unwrap();
+                        } else {
+                            // Root anchor (@main) with no parent — terminate.
+                            self.cleanup_to_depth(0);
+                            let exit_fn = self.module.get_function("exit").unwrap();
+                            self.builder
+                                .build_call(
+                                    exit_fn,
+                                    &[self.context.i32_type().const_int(1, false).into()],
+                                    "",
                                 )
                                 .unwrap();
-                            let normal_bb = self.context.append_basic_block(
-                                self.current_fn.unwrap(),
-                                "kill_normal_recover",
-                            );
-                            let escalated_bb = self.context.append_basic_block(
-                                self.current_fn.unwrap(),
-                                "kill_escalated_recover",
-                            );
-                            self.builder
-                                .build_conditional_branch(escalate_cond, escalated_bb, normal_bb)
-                                .unwrap();
-
-                            self.builder.position_at_end(normal_bb);
-                            self.cleanup_to_depth(normal_depth);
-                            self.builder
-                                .build_unconditional_branch(recovery_bb)
-                                .unwrap();
-                            self.builder.position_at_end(escalated_bb);
-                            self.cleanup_to_depth(escalate_depth);
-                            target_bb = escalate_bb;
-                            target_depth = escalate_depth;
+                            self.builder.build_unreachable().unwrap();
                         }
+                    } else {
+                        // No counter (shouldn't happen in well-formed code) — just restart.
+                        self.cleanup_to_depth(normal_depth);
+                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
                     }
-                    if self.no_terminator() {
-                        self.cleanup_to_depth(target_depth);
-                    }
-                    self.builder.build_unconditional_branch(target_bb).unwrap();
                 }
             }
 
@@ -505,9 +536,14 @@ impl<'ctx> Codegen<'ctx> {
 
             Stmt::InlineAnchor { name, body, .. } => {
                 let func = self.current_fn.unwrap();
-                let anchor_bb = self
+
+                // ── Blocks ───────────────────────────────────────────────────
+                // anchor_loop_bb  : restart target (loop header)
+                // recovery_bb     : Kill jumps here, then restart
+                // merge_bb        : yield / normal completion lands here
+                let anchor_loop_bb = self
                     .context
-                    .append_basic_block(func, &format!("anchor_{}", name));
+                    .append_basic_block(func, &format!("anchor_loop_{}", name));
                 let recovery_bb = self
                     .context
                     .append_basic_block(func, &format!("recover_{}", name));
@@ -515,7 +551,7 @@ impl<'ctx> Codegen<'ctx> {
                     .context
                     .append_basic_block(func, &format!("after_{}", name));
 
-                // yield 슬롯 (i64 사용 — 범용)
+                // Persist across restarts — allocate before the loop
                 let yield_alloca = self.build_alloca(&format!("{}_yield", name), &Ty::I64);
                 self.builder
                     .build_store(yield_alloca, self.i64_type().const_int(0, false))
@@ -526,11 +562,42 @@ impl<'ctx> Codegen<'ctx> {
                     .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
                     .unwrap();
 
-                self.builder.build_unconditional_branch(anchor_bb).unwrap();
-                self.builder.position_at_end(anchor_bb);
+                // Jump into the restart loop
+                self.builder
+                    .build_unconditional_branch(anchor_loop_bb)
+                    .unwrap();
+                self.builder.position_at_end(anchor_loop_bb);
 
-                // 스택에 복구/yield 정보 push
+                // sigsetjmp at loop header for signal recovery
+                let enter_fn = self.module.get_function("kyte_anchor_enter").unwrap();
+                let jmp_ret = self
+                    .builder
+                    .build_call(enter_fn, &[], &format!("{}_jmp", name))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .basic()
+                    .unwrap()
+                    .into_int_value();
+                let jmp_sig = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        jmp_ret,
+                        self.context.i32_type().const_int(0, false),
+                        &format!("{}_sig", name),
+                    )
+                    .unwrap();
+                let body_start =
+                    self.context
+                        .append_basic_block(func, &format!("body_start_{}", name));
+                self.builder
+                    .build_conditional_branch(jmp_sig, recovery_bb, body_start)
+                    .unwrap();
+                self.builder.position_at_end(body_start);
+
+                // Push supervisor stacks
                 self.recovery_stack.push(recovery_bb);
+                self.anchor_restart_bb_stack.push(anchor_loop_bb);
                 self.kill_cleanup_depth_stack
                     .push(self.vault_scope_stack.len());
                 self.yield_slot.push(yield_alloca);
@@ -541,23 +608,27 @@ impl<'ctx> Codegen<'ctx> {
 
                 self.compile_stmts(body, params);
 
-                // 정상 종료 시 merge로
+                // Normal exit → merge (yield path also goes to merge_bb)
                 if self.no_terminator() {
                     self.builder.build_unconditional_branch(merge_bb).unwrap();
                 }
 
-                // 복구 블록 — Kill이 여기로 점프 + vault assert 검증
+                // Recovery block — Kill lands here, then loops back to restart
                 self.builder.position_at_end(recovery_bb);
-                self.emit_recovery_vault_assert(merge_bb, inline_exp_vaults, name);
+                self.emit_recovery_vault_assert(anchor_loop_bb, inline_exp_vaults, name);
 
-                // 스택 pop
+                // Pop supervisor stacks
                 self.recovery_stack.pop();
+                self.anchor_restart_bb_stack.pop();
                 self.kill_cleanup_depth_stack.pop();
                 self.yield_slot.pop();
                 self.yield_merge_bb.pop();
                 self.kill_count_slot.pop();
 
+                // After anchor: pop signal slot on clean exit
                 self.builder.position_at_end(merge_bb);
+                let exit_fn_rt = self.module.get_function("kyte_anchor_exit").unwrap();
+                self.builder.build_call(exit_fn_rt, &[], "").unwrap();
             }
 
             Stmt::Match { expr, arms } => {

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use inkwell::types::{BasicMetadataTypeEnum, BasicType};
+use inkwell::types::BasicMetadataTypeEnum;
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 

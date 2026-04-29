@@ -21,10 +21,14 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// recovery 블록 진입 시 vault 카운터 assert 검증
+    /// recovery 블록 진입 시 vault 카운터 assert 검증.
+    ///
+    /// `restart_bb` — 검증 통과 후 점프할 블록.
+    ///   * 앵커 재시작 시: 앵커 루프 헤더 (anchor_loop_bb)
+    ///   * 정상 종료 후 계속: merge/after 블록
     pub(super) fn emit_recovery_vault_assert(
         &mut self,
-        merge_bb: BasicBlock<'ctx>,
+        restart_bb: BasicBlock<'ctx>,
         expected_alloca: Option<PointerValue<'ctx>>,
         anchor_name: &str,
     ) {
@@ -76,7 +80,14 @@ impl<'ctx> Codegen<'ctx> {
 
             self.builder.position_at_end(ok_bb);
         }
-        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        // Pop the signal recovery slot before restarting the anchor loop.
+        // Each iteration of the loop calls kyte_anchor_enter() (push), so we
+        // must call kyte_anchor_exit() (pop) here to keep the depth at 1.
+        if let Some(exit_fn) = self.module.get_function("kyte_anchor_exit") {
+            self.builder.build_call(exit_fn, &[], "").unwrap();
+        }
+        // Jump to restart_bb (anchor loop header)
+        self.builder.build_unconditional_branch(restart_bb).unwrap();
     }
 
     pub(super) fn emit_null_check(&mut self, ptr: PointerValue<'ctx>, label: &str) {

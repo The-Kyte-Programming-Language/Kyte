@@ -436,17 +436,19 @@ impl<'ctx> Codegen<'ctx> {
                 let is_unsigned = matches!(ty, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64);
                 let wide = if iv.get_type().get_bit_width() < 64 {
                     if is_unsigned {
-                        self.builder.build_int_z_extend(iv, self.i64_type(), "ext").unwrap()
+                        self.builder
+                            .build_int_z_extend(iv, self.i64_type(), "ext")
+                            .unwrap()
                     } else {
-                        self.builder.build_int_s_extend(iv, self.i64_type(), "ext").unwrap()
+                        self.builder
+                            .build_int_s_extend(iv, self.i64_type(), "ext")
+                            .unwrap()
                     }
                 } else {
                     iv
                 };
-                let fmt = self.global_string_ptr(
-                    if is_unsigned { "%llu" } else { "%lld" },
-                    "fmt_i2s",
-                );
+                let fmt =
+                    self.global_string_ptr(if is_unsigned { "%llu" } else { "%lld" }, "fmt_i2s");
                 (fmt, wide.into())
             }
         };

@@ -370,8 +370,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
 
                 if let Some(&recovery_bb) = self.recovery_stack.last() {
-                    let normal_depth =
-                        self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
+                    let normal_depth = self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
 
                     if let Some(&counter_ptr) = self.kill_count_slot.last() {
                         // ── Increment kill counter ───────────────────────────
@@ -401,14 +400,12 @@ impl<'ctx> Codegen<'ctx> {
                             )
                             .unwrap();
 
-                        let normal_bb = self.context.append_basic_block(
-                            self.current_fn.unwrap(),
-                            "kill_restart",
-                        );
-                        let escalated_bb = self.context.append_basic_block(
-                            self.current_fn.unwrap(),
-                            "kill_escalate",
-                        );
+                        let normal_bb = self
+                            .context
+                            .append_basic_block(self.current_fn.unwrap(), "kill_restart");
+                        let escalated_bb = self
+                            .context
+                            .append_basic_block(self.current_fn.unwrap(), "kill_escalate");
                         self.builder
                             .build_conditional_branch(escalate_cond, escalated_bb, normal_bb)
                             .unwrap();
@@ -432,8 +429,7 @@ impl<'ctx> Codegen<'ctx> {
                                 .copied()
                                 .unwrap_or(0);
                             // Log the escalation
-                            let log_esc =
-                                self.module.get_function("kyte_log_escalate").unwrap();
+                            let log_esc = self.module.get_function("kyte_log_escalate").unwrap();
                             let anc_ptr = self.global_string_ptr("anchor", "esc_anc_name");
                             self.builder
                                 .build_call(log_esc, &[anc_ptr.into()], "")
@@ -458,7 +454,9 @@ impl<'ctx> Codegen<'ctx> {
                     } else {
                         // No counter (shouldn't happen in well-formed code) — just restart.
                         self.cleanup_to_depth(normal_depth);
-                        self.builder.build_unconditional_branch(recovery_bb).unwrap();
+                        self.builder
+                            .build_unconditional_branch(recovery_bb)
+                            .unwrap();
                     }
                 }
             }
@@ -577,9 +575,9 @@ impl<'ctx> Codegen<'ctx> {
                         &format!("{}_sig", name),
                     )
                     .unwrap();
-                let body_start =
-                    self.context
-                        .append_basic_block(func, &format!("body_start_{}", name));
+                let body_start = self
+                    .context
+                    .append_basic_block(func, &format!("body_start_{}", name));
                 self.builder
                     .build_conditional_branch(jmp_sig, recovery_bb, body_start)
                     .unwrap();

@@ -426,8 +426,7 @@ impl<'ctx> Codegen<'ctx> {
                         "signal_caught",
                     )
                     .unwrap();
-                let body_start_bb =
-                    self.context.append_basic_block(main_fn, "main_body_start");
+                let body_start_bb = self.context.append_basic_block(main_fn, "main_body_start");
                 self.builder
                     .build_conditional_branch(jmp_is_signal, main_recover, body_start_bb)
                     .unwrap();
@@ -472,12 +471,7 @@ impl<'ctx> Codegen<'ctx> {
                             }
                             _ => {
                                 // Inline child anchor with restart loop.
-                                self.emit_child_anchor(
-                                    child_name,
-                                    child_body,
-                                    grandchildren,
-                                    &[],
-                                );
+                                self.emit_child_anchor(child_name, child_body, grandchildren, &[]);
                             }
                         }
                     }
@@ -547,8 +541,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder
             .build_store(yield_alloca, self.i64_type().const_int(0, false))
             .unwrap();
-        let kill_count_alloca =
-            self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
+        let kill_count_alloca = self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
         self.builder
             .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
             .unwrap();
@@ -576,9 +569,9 @@ impl<'ctx> Codegen<'ctx> {
                 &format!("{}_sig", child_name),
             )
             .unwrap();
-        let body_start =
-            self.context
-                .append_basic_block(func, &format!("body_{}", child_name));
+        let body_start = self
+            .context
+            .append_basic_block(func, &format!("body_{}", child_name));
         self.builder
             .build_conditional_branch(jmp_signal, child_recover, body_start)
             .unwrap();
@@ -696,9 +689,7 @@ impl<'ctx> Codegen<'ctx> {
         let thread_loop = self
             .context
             .append_basic_block(body_fn, "thread_anchor_loop");
-        let thread_recover = self
-            .context
-            .append_basic_block(body_fn, "thread_recover");
+        let thread_recover = self.context.append_basic_block(body_fn, "thread_recover");
         let thread_after = self.context.append_basic_block(body_fn, "thread_after");
 
         self.builder.position_at_end(entry);
@@ -709,13 +700,11 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap();
         self.vault_live_count = Some(vlc);
 
-        let yield_alloca =
-            self.build_alloca(&format!("{}_yield", anchor_name), &Ty::I64);
+        let yield_alloca = self.build_alloca(&format!("{}_yield", anchor_name), &Ty::I64);
         self.builder
             .build_store(yield_alloca, self.i64_type().const_int(0, false))
             .unwrap();
-        let kill_count_alloca =
-            self.build_alloca(&format!("{}_kill_count", anchor_name), &Ty::I64);
+        let kill_count_alloca = self.build_alloca(&format!("{}_kill_count", anchor_name), &Ty::I64);
         self.builder
             .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
             .unwrap();
@@ -815,7 +804,12 @@ impl<'ctx> Codegen<'ctx> {
             self.builder
                 .build_call(
                     spawn_fn,
-                    &[fn_ptr.into(), arg_null.into(), max_restarts.into(), name_ptr.into()],
+                    &[
+                        fn_ptr.into(),
+                        arg_null.into(),
+                        max_restarts.into(),
+                        name_ptr.into(),
+                    ],
                     "",
                 )
                 .unwrap();

@@ -178,10 +178,7 @@ impl<'ctx> Codegen<'ctx> {
             return;
         }
         let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(
-            &[self.ptr_type().into(), self.ptr_type().into()],
-            false,
-        );
+        let fn_type = void_type.fn_type(&[self.ptr_type().into(), self.ptr_type().into()], false);
         self.module.add_function(
             "kyte_log_kill",
             fn_type,
@@ -210,10 +207,7 @@ impl<'ctx> Codegen<'ctx> {
         }
         let void_type = self.context.void_type();
         let fn_type = void_type.fn_type(
-            &[
-                self.ptr_type().into(),
-                self.context.i32_type().into(),
-            ],
+            &[self.ptr_type().into(), self.context.i32_type().into()],
             false,
         );
         self.module.add_function(
@@ -225,7 +219,11 @@ impl<'ctx> Codegen<'ctx> {
 
     /// `int kyte_spawn_thread_anchor(fn*, void*, int, char*)` — spawn a supervised thread.
     pub(super) fn declare_kyte_spawn_thread_anchor(&mut self) {
-        if self.module.get_function("kyte_spawn_thread_anchor").is_some() {
+        if self
+            .module
+            .get_function("kyte_spawn_thread_anchor")
+            .is_some()
+        {
             return;
         }
         let i32_type = self.context.i32_type();

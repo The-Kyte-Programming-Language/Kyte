@@ -61,7 +61,11 @@ impl<'ctx> Codegen<'ctx> {
                 // len() 빌트인
                 if name == "len" {
                     if let Expr::Ident(arg_name) = &args[0] {
-                        let len = self.array_lengths.get(arg_name.as_str()).copied().unwrap_or(0);
+                        let len = self
+                            .array_lengths
+                            .get(arg_name.as_str())
+                            .copied()
+                            .unwrap_or(0);
                         return self.i64_type().const_int(len, false).into();
                     }
                     return self.i64_type().const_int(0, false).into();
@@ -228,12 +232,14 @@ impl<'ctx> Codegen<'ctx> {
                 let field_info: Vec<(String, Ty)> = self
                     .struct_defs
                     .get(name)
-                    .map(|defs| defs.iter().map(|f| (f.name.clone(), f.ty.clone())).collect())
+                    .map(|defs| {
+                        defs.iter()
+                            .map(|f| (f.name.clone(), f.ty.clone()))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 for (idx, (fname, fty)) in field_info.iter().enumerate() {
-                    let value = if let Some((_, expr)) =
-                        fields.iter().find(|(n, _)| n == fname)
-                    {
+                    let value = if let Some((_, expr)) = fields.iter().find(|(n, _)| n == fname) {
                         let v = self.compile_expr(expr, params);
                         self.coerce_to_ty(v, fty)
                     } else {

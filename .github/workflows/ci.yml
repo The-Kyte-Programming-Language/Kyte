@@ -63,33 +63,32 @@ jobs:
           echo "$LLVM_PREFIX/bin" >> $GITHUB_PATH
 
       # ── LLVM 설치 (Windows) ───────────────────────────────────────────────────
-      # `echo >> $env:GITHUB_ENV` 은 UTF-16 LE를 생성해 GitHub Actions가 파싱 못함.
-      # Add-Content -Value 를 사용하면 pwsh에서 UTF-8로 올바르게 기록됨.
-      # llvm-config.exe 를 확인 — clang.exe 만으로는 dev 라이브러리 보장 안 됨.
+      # LLVM-*.win64.exe (NSIS 인스톨러)는 엔드유저용 런타임 배포판으로
+      # llvm-config.exe 와 개발 라이브러리가 포함되지 않음.
+      # clang+llvm-*-x86_64-pc-windows-msvc.tar.xz 는 개발자용 전체 툴체인으로
+      # llvm-config.exe, 헤더, .lib 파일이 모두 포함됨.
       - name: Install LLVM (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $ver = "${{ env.LLVM_WIN_VERSION }}"
-          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/LLVM-$ver-win64.exe"
-          $out = "$env:TEMP\LLVM-$ver.exe"
-          Write-Host "Downloading LLVM $ver..."
-          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
-          Write-Host "Installing LLVM (silent)..."
-          $proc = Start-Process -FilePath $out -ArgumentList "/S" -PassThru -Wait
-          if ($proc.ExitCode -ne 0) {
-            Write-Error "LLVM installer failed (exit code $($proc.ExitCode))"
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
+          $archive = "$env:RUNNER_TEMP\llvm.tar.xz"
+          $llvmDir = "C:\LLVM"
+          Write-Host "Downloading LLVM $ver dev toolchain..."
+          Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
+          Write-Host "Extracting to $llvmDir..."
+          New-Item -ItemType Directory -Force $llvmDir | Out-Null
+          tar -xf $archive -C $llvmDir --strip-components 1
+          if ($LASTEXITCODE -ne 0) { Write-Error "tar extraction failed"; exit 1 }
+          if (-not (Test-Path "$llvmDir\bin\llvm-config.exe")) {
+            Write-Error "llvm-config.exe not found after extraction"
             exit 1
           }
-          $prefix = "C:\Program Files\LLVM"
-          if (-not (Test-Path "$prefix\bin\llvm-config.exe")) {
-            Write-Error "llvm-config.exe not found — LLVM dev tools missing"
-            exit 1
-          }
-          Add-Content -Path $env:GITHUB_ENV -Value "LLVM_SYS_211_PREFIX=$prefix"
-          Add-Content -Path $env:GITHUB_PATH -Value "$prefix\bin"
-          Write-Host "LLVM $ver ready at $prefix"
+          Add-Content -Path $env:GITHUB_ENV -Value "LLVM_SYS_211_PREFIX=$llvmDir"
+          Add-Content -Path $env:GITHUB_PATH -Value "$llvmDir\bin"
+          Write-Host "LLVM $ver ready at $llvmDir"
 
       # ── 빌드 & 검사 ──────────────────────────────────────────────────────────
       - name: Check formatting

@@ -104,24 +104,22 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $ver = "${{ env.LLVM_WIN_VERSION }}"
-          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/LLVM-$ver-win64.exe"
-          $out = "$env:TEMP\LLVM-$ver.exe"
-          Write-Host "Downloading LLVM $ver..."
-          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
-          Write-Host "Installing LLVM (silent)..."
-          $proc = Start-Process -FilePath $out -ArgumentList "/S" -PassThru -Wait
-          if ($proc.ExitCode -ne 0) {
-            Write-Error "LLVM installer failed (exit code $($proc.ExitCode))"
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
+          $archive = "$env:RUNNER_TEMP\llvm.tar.xz"
+          $llvmDir = "C:\LLVM"
+          Write-Host "Downloading LLVM $ver dev toolchain..."
+          Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
+          Write-Host "Extracting to $llvmDir..."
+          New-Item -ItemType Directory -Force $llvmDir | Out-Null
+          tar -xf $archive -C $llvmDir --strip-components 1
+          if ($LASTEXITCODE -ne 0) { Write-Error "tar extraction failed"; exit 1 }
+          if (-not (Test-Path "$llvmDir\bin\llvm-config.exe")) {
+            Write-Error "llvm-config.exe not found after extraction"
             exit 1
           }
-          $prefix = "C:\Program Files\LLVM"
-          if (-not (Test-Path "$prefix\bin\llvm-config.exe")) {
-            Write-Error "llvm-config.exe not found — LLVM dev tools missing"
-            exit 1
-          }
-          Add-Content -Path $env:GITHUB_ENV -Value "LLVM_SYS_211_PREFIX=$prefix"
-          Add-Content -Path $env:GITHUB_PATH -Value "$prefix\bin"
-          Write-Host "LLVM $ver ready at $prefix"
+          Add-Content -Path $env:GITHUB_ENV -Value "LLVM_SYS_211_PREFIX=$llvmDir"
+          Add-Content -Path $env:GITHUB_PATH -Value "$llvmDir\bin"
+          Write-Host "LLVM $ver ready at $llvmDir"
 
       # ── 빌드 ──────────────────────────────────────────────────────────────────
       - name: Build release binary

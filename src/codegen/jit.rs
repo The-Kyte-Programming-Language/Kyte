@@ -9,7 +9,7 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     pub fn print_ir(&self) {
-        println!("{}", self.module.print_to_string().to_string());
+        println!("{}", self.module.print_to_string());
     }
 
     pub fn run_i64_function(&self, name: &str) -> Result<i64, String> {

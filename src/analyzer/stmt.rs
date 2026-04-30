@@ -547,20 +547,18 @@ impl Analyzer {
             }
             // Recurse into nested non-loop blocks (if/else bodies)
             // but NOT into inner loops (they will self-check) or anchors
-            match stmt {
-                Stmt::If {
-                    then_body,
-                    else_body,
-                    ..
-                } => {
-                    self.check_vault_in_loop(then_body, loop_kind);
-                    if let Some(eb) = else_body {
-                        self.check_vault_in_loop(eb, loop_kind);
-                    }
+            // Do NOT recurse into nested loops (they check themselves)
+            // or InlineAnchor (separate supervision domain)
+            if let Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } = stmt
+            {
+                self.check_vault_in_loop(then_body, loop_kind);
+                if let Some(eb) = else_body {
+                    self.check_vault_in_loop(eb, loop_kind);
                 }
-                // Do NOT recurse into nested loops (they check themselves)
-                // or InlineAnchor (separate supervision domain)
-                _ => {}
             }
         }
     }

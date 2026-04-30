@@ -106,10 +106,9 @@ impl<'ctx> Codegen<'ctx> {
             .write_to_file(&self.module, FileType::Object, Path::new(path))
             .expect("Failed to write object file");
 
-        // Prevent LLVM destructor crashes on Windows — leak all LLVM objects
+        // Prevent LLVM TargetMachine destructor crash on Windows (inkwell bug).
+        // Target / TargetTriple do not implement Drop, so only machine needs forget.
         std::mem::forget(machine);
-        std::mem::forget(target);
-        std::mem::forget(triple);
     }
 
     pub fn write_ir_file(&self, path: &str) {

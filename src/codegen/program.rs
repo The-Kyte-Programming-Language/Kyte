@@ -349,6 +349,8 @@ impl<'ctx> Codegen<'ctx> {
                 kind: AnchorKind::Main,
                 body,
                 children,
+                catch_param,
+                catch_body,
                 ..
             } = item
             {
@@ -367,6 +369,11 @@ impl<'ctx> Codegen<'ctx> {
                 let main_loop = self.context.append_basic_block(main_fn, "main_loop");
                 let main_recover = self.context.append_basic_block(main_fn, "recover_main");
                 let main_after = self.context.append_basic_block(main_fn, "after_main");
+                let main_catch_bb = if catch_body.is_some() {
+                    Some(self.context.append_basic_block(main_fn, "catch_main"))
+                } else {
+                    None
+                };
 
                 self.builder.position_at_end(entry);
 
@@ -390,6 +397,16 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder
                     .build_store(main_kill_count, self.i64_type().const_int(0, false))
                     .unwrap();
+
+                // catch message slot (only when catch exists)
+                let main_catch_msg_slot = if catch_body.is_some() {
+                    let slot = self.build_alloca("main_catch_msg", &Ty::String);
+                    let empty = self.global_string_ptr("", "catch_empty");
+                    self.builder.build_store(slot, empty).unwrap();
+                    Some(slot)
+                } else {
+                    None
+                };
 
                 // Pre-null the Vault pointer allocas for all Vaults in the
                 // main body.  This ensures cleanup-before-VaultDecl is safe
@@ -440,6 +457,8 @@ impl<'ctx> Codegen<'ctx> {
                 self.yield_slot.push(main_yield);
                 self.yield_merge_bb.push(main_after);
                 self.kill_count_slot.push(main_kill_count);
+                self.catch_bb_stack.push(main_catch_bb);
+                self.catch_msg_slot_stack.push(main_catch_msg_slot);
 
                 // Null-initialize Vault ptr allocas that haven't been touched
                 // yet (important on restarts so cleanup doesn't free garbage).
@@ -462,16 +481,24 @@ impl<'ctx> Codegen<'ctx> {
                         kind: child_kind,
                         body: child_body,
                         children: grandchildren,
+                        catch_param: child_catch_param,
+                        catch_body: child_catch_body,
+                        ..
                     } = child
                     {
                         match child_kind {
                             AnchorKind::Thread => {
-                                // @child(thread) — spawn a supervised OS thread.
                                 self.emit_thread_anchor(child_name, child_body, grandchildren);
                             }
                             _ => {
-                                // Inline child anchor with restart loop.
-                                self.emit_child_anchor(child_name, child_body, grandchildren, &[]);
+                                self.emit_child_anchor(
+                                    child_name,
+                                    child_body,
+                                    grandchildren,
+                                    &[],
+                                    child_catch_param.as_deref(),
+                                    child_catch_body.as_deref(),
+                                );
                             }
                         }
                     }
@@ -496,6 +523,40 @@ impl<'ctx> Codegen<'ctx> {
                 self.yield_slot.pop();
                 self.yield_merge_bb.pop();
                 self.kill_count_slot.pop();
+                self.catch_bb_stack.pop();
+                self.catch_msg_slot_stack.pop();
+
+                // ── catch block (cold path) ───────────────────────────────────
+                if let (Some(catch_bb), Some(catch_stmts)) =
+                    (main_catch_bb, catch_body.as_deref())
+                {
+                    self.builder.position_at_end(catch_bb);
+                    let param_name = catch_param.as_deref().unwrap_or("_reason");
+                    if let Some(msg_slot) = main_catch_msg_slot {
+                        let msg_val = self
+                            .builder
+                            .build_load(self.ptr_type(), msg_slot, param_name)
+                            .unwrap();
+                        let param_alloca = self.build_alloca(param_name, &Ty::String);
+                        self.builder.build_store(param_alloca, msg_val).unwrap();
+                        self.variables.insert(param_name.to_string(), param_alloca);
+                        self.var_types.insert(param_name.to_string(), Ty::String);
+                    }
+                    let catch_start_depth = self.vault_scope_stack.len();
+                    let old_break_bb = self.break_bb.replace(main_after);
+                    let old_break_depth = self.break_cleanup_depth.replace(catch_start_depth);
+                    self.compile_stmts(catch_stmts, &[]);
+                    self.break_bb = old_break_bb;
+                    self.break_cleanup_depth = old_break_depth;
+                    self.variables.remove(param_name);
+                    self.var_types.remove(param_name);
+                    if self.no_terminator() {
+                        self.cleanup_to_depth(catch_start_depth);
+                        self.builder
+                            .build_unconditional_branch(main_loop)
+                            .unwrap();
+                    }
+                }
 
                 // ── after_main ────────────────────────────────────────────────
                 self.builder.position_at_end(main_after);
@@ -521,6 +582,8 @@ impl<'ctx> Codegen<'ctx> {
         child_body: &[(Stmt, Span)],
         grandchildren: &[(TopLevel, Span)],
         params: &[Param],
+        catch_param: Option<&str>,
+        catch_body: Option<&[(Stmt, Span)]>,
     ) {
         if !self.no_terminator() {
             return;
@@ -536,21 +599,33 @@ impl<'ctx> Codegen<'ctx> {
         let child_after = self
             .context
             .append_basic_block(func, &format!("after_{}", child_name));
+        let child_catch_bb = if catch_body.is_some() {
+            Some(self.context.append_basic_block(func, &format!("catch_{}", child_name)))
+        } else {
+            None
+        };
 
         let yield_alloca = self.build_alloca(&format!("{}_yield", child_name), &Ty::I64);
         self.builder
             .build_store(yield_alloca, self.i64_type().const_int(0, false))
             .unwrap();
-        let kill_count_alloca = self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
+        let kill_count_alloca =
+            self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
         self.builder
             .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
             .unwrap();
+        let child_catch_msg_slot = if catch_body.is_some() {
+            let slot = self.build_alloca(&format!("{}_catch_msg", child_name), &Ty::String);
+            let empty = self.global_string_ptr("", "catch_empty");
+            self.builder.build_store(slot, empty).unwrap();
+            Some(slot)
+        } else {
+            None
+        };
 
-        // Jump into the loop
         self.builder.build_unconditional_branch(child_loop).unwrap();
         self.builder.position_at_end(child_loop);
 
-        // sigsetjmp at child anchor entry
         let enter_fn = self.module.get_function("kyte_anchor_enter").unwrap();
         let jmp_ret = self
             .builder
@@ -584,8 +659,9 @@ impl<'ctx> Codegen<'ctx> {
         self.yield_slot.push(yield_alloca);
         self.yield_merge_bb.push(child_after);
         self.kill_count_slot.push(kill_count_alloca);
+        self.catch_bb_stack.push(child_catch_bb);
+        self.catch_msg_slot_stack.push(child_catch_msg_slot);
 
-        // Null-init Vault allocas for clean restart
         let child_vault_names = collect_vault_names(child_body);
         for vname in &child_vault_names {
             if let Some(&ptr) = self.variables.get(vname) {
@@ -598,13 +674,15 @@ impl<'ctx> Codegen<'ctx> {
         let child_exp_vaults = self.save_vault_count(child_name);
         self.compile_stmts(child_body, params);
 
-        // Grandchildren
         for (gc, _) in grandchildren {
             if let TopLevel::Anchor {
                 name: gc_name,
                 kind: gc_kind,
                 body: gc_body,
                 children: gc_children,
+                catch_param: gc_catch_param,
+                catch_body: gc_catch_body,
+                ..
             } = gc
             {
                 match gc_kind {
@@ -612,7 +690,14 @@ impl<'ctx> Codegen<'ctx> {
                         self.emit_thread_anchor(gc_name, gc_body, gc_children);
                     }
                     _ => {
-                        self.emit_child_anchor(gc_name, gc_body, gc_children, params);
+                        self.emit_child_anchor(
+                            gc_name,
+                            gc_body,
+                            gc_children,
+                            params,
+                            gc_catch_param.as_deref(),
+                            gc_catch_body.as_deref(),
+                        );
                     }
                 }
             }
@@ -624,7 +709,7 @@ impl<'ctx> Codegen<'ctx> {
                 .unwrap();
         }
 
-        // Recovery → restart child loop
+        // Signal recovery → restart
         self.builder.position_at_end(child_recover);
         self.emit_recovery_vault_assert(child_loop, child_exp_vaults, child_name);
 
@@ -634,8 +719,37 @@ impl<'ctx> Codegen<'ctx> {
         self.yield_slot.pop();
         self.yield_merge_bb.pop();
         self.kill_count_slot.pop();
+        self.catch_bb_stack.pop();
+        self.catch_msg_slot_stack.pop();
 
-        // Pop signal slot on clean exit
+        // Catch block (cold path)
+        if let (Some(catch_bb), Some(catch_stmts)) = (child_catch_bb, catch_body) {
+            self.builder.position_at_end(catch_bb);
+            let param_name = catch_param.unwrap_or("_reason");
+            if let Some(msg_slot) = child_catch_msg_slot {
+                let msg_val = self
+                    .builder
+                    .build_load(self.ptr_type(), msg_slot, param_name)
+                    .unwrap();
+                let param_alloca = self.build_alloca(param_name, &Ty::String);
+                self.builder.build_store(param_alloca, msg_val).unwrap();
+                self.variables.insert(param_name.to_string(), param_alloca);
+                self.var_types.insert(param_name.to_string(), Ty::String);
+            }
+            let catch_start_depth = self.vault_scope_stack.len();
+            let old_break_bb = self.break_bb.replace(child_after);
+            let old_break_depth = self.break_cleanup_depth.replace(catch_start_depth);
+            self.compile_stmts(catch_stmts, params);
+            self.break_bb = old_break_bb;
+            self.break_cleanup_depth = old_break_depth;
+            self.variables.remove(param_name);
+            self.var_types.remove(param_name);
+            if self.no_terminator() {
+                self.cleanup_to_depth(catch_start_depth);
+                self.builder.build_unconditional_branch(child_loop).unwrap();
+            }
+        }
+
         self.builder.position_at_end(child_after);
         let exit_fn = self.module.get_function("kyte_anchor_exit").unwrap();
         self.builder.build_call(exit_fn, &[], "").unwrap();

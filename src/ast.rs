@@ -37,6 +37,7 @@ pub enum Token {
     Fn,       // fn (closure)
     Pipe,     // |
     Import,   // import
+    Catch,    // catch
 
     // 타입
     Int,    // int
@@ -323,6 +324,8 @@ pub enum Stmt {
         name: String,
         kind: AnchorKind,
         body: Vec<(Stmt, Span)>,
+        catch_param: Option<String>,
+        catch_body: Option<Vec<(Stmt, Span)>>,
     },
     // 표현식 구문 (함수 호출 등)
     ExprStmt(Expr),
@@ -383,6 +386,8 @@ pub enum TopLevel {
         kind: AnchorKind,
         body: Vec<(Stmt, Span)>,
         children: Vec<(TopLevel, Span)>,
+        catch_param: Option<String>,
+        catch_body: Option<Vec<(Stmt, Span)>>,
     },
     // function add(int a, int b) -> int { ... }
     Function {

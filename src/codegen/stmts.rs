@@ -360,103 +360,130 @@ impl<'ctx> Codegen<'ctx> {
             }
 
             Stmt::Kill(msg) => {
-                // ── Log the kill message ─────────────────────────────────────
-                if let Some(e) = msg {
-                    // Use kyte_log_kill(anchor_name, message_str) when possible.
-                    // For non-string expressions fall back to print.
+                // ── Compile kill message as i8* ──────────────────────────────
+                let kill_msg_ptr = if let Some(e) = msg {
                     let ty = self.guess_expr_ty(e, params);
                     let val = self.compile_expr(e, params);
-                    self.emit_print(val, Some(&ty));
-                }
+                    if matches!(ty, Ty::String) {
+                        val.into_pointer_value()
+                    } else {
+                        // non-string: print for visibility, store empty in catch slot
+                        self.emit_print(val, Some(&ty));
+                        self.global_string_ptr("", "kill_msg_empty")
+                    }
+                } else {
+                    self.global_string_ptr("", "kill_msg_empty")
+                };
 
-                if let Some(&recovery_bb) = self.recovery_stack.last() {
-                    let normal_depth = self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
+                // ── Optimization: catch block → direct jump, no counter ──────
+                let maybe_catch = self.catch_bb_stack.last().and_then(|x| *x);
 
-                    if let Some(&counter_ptr) = self.kill_count_slot.last() {
-                        // ── Increment kill counter ───────────────────────────
-                        let cur = self
-                            .builder
-                            .build_load(self.i64_type(), counter_ptr, "kill_count")
-                            .unwrap()
-                            .into_int_value();
-                        let next = self
-                            .builder
-                            .build_int_add(
-                                cur,
-                                self.i64_type().const_int(1, false),
-                                "kill_count_next",
-                            )
-                            .unwrap();
-                        self.builder.build_store(counter_ptr, next).unwrap();
+                if let Some(catch_bb) = maybe_catch {
+                    // Store message for catch parameter
+                    if let Some(Some(msg_slot)) = self.catch_msg_slot_stack.last().copied() {
+                        self.builder.build_store(msg_slot, kill_msg_ptr).unwrap();
+                    }
+                    let cleanup_depth =
+                        self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
+                    self.cleanup_to_depth(cleanup_depth);
+                    self.builder.build_unconditional_branch(catch_bb).unwrap();
+                } else {
+                    // ── No catch: print message then counter + escalation ─────
+                    // (catch path suppresses printing — catch body handles it)
+                    if let Some(e) = msg {
+                        if matches!(self.guess_expr_ty(e, params), Ty::String) {
+                            self.emit_print(kill_msg_ptr.into(), Some(&Ty::String));
+                        }
+                    }
 
-                        // ── Decide: restart or escalate ──────────────────────
-                        let escalate_cond = self
-                            .builder
-                            .build_int_compare(
-                                IntPredicate::UGE,
-                                next,
-                                self.i64_type().const_int(3, false),
-                                "kill_escalate_cond",
-                            )
-                            .unwrap();
+                    if let Some(&recovery_bb) = self.recovery_stack.last() {
+                        let normal_depth =
+                            self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
 
-                        let normal_bb = self
-                            .context
-                            .append_basic_block(self.current_fn.unwrap(), "kill_restart");
-                        let escalated_bb = self
-                            .context
-                            .append_basic_block(self.current_fn.unwrap(), "kill_escalate");
-                        self.builder
-                            .build_conditional_branch(escalate_cond, escalated_bb, normal_bb)
-                            .unwrap();
-
-                        // ── normal_bb: cleanup + restart current anchor ───────
-                        self.builder.position_at_end(normal_bb);
-                        self.cleanup_to_depth(normal_depth);
-                        self.builder
-                            .build_unconditional_branch(recovery_bb)
-                            .unwrap();
-
-                        // ── escalated_bb: escalate to parent or Exit ──────────
-                        self.builder.position_at_end(escalated_bb);
-                        if self.recovery_stack.len() >= 2 {
-                            // Has a parent anchor — escalate to it.
-                            let parent_recovery =
-                                self.recovery_stack[self.recovery_stack.len() - 2];
-                            let parent_depth = self
-                                .kill_cleanup_depth_stack
-                                .get(self.kill_cleanup_depth_stack.len() - 2)
-                                .copied()
-                                .unwrap_or(0);
-                            // Log the escalation
-                            let log_esc = self.module.get_function("kyte_log_escalate").unwrap();
-                            let anc_ptr = self.global_string_ptr("anchor", "esc_anc_name");
-                            self.builder
-                                .build_call(log_esc, &[anc_ptr.into()], "")
-                                .unwrap();
-                            self.cleanup_to_depth(parent_depth);
-                            self.builder
-                                .build_unconditional_branch(parent_recovery)
-                                .unwrap();
-                        } else {
-                            // Root anchor (@main) with no parent — terminate.
-                            self.cleanup_to_depth(0);
-                            let exit_fn = self.module.get_function("exit").unwrap();
-                            self.builder
-                                .build_call(
-                                    exit_fn,
-                                    &[self.context.i32_type().const_int(1, false).into()],
-                                    "",
+                        if let Some(&counter_ptr) = self.kill_count_slot.last() {
+                            // ── Increment kill counter ───────────────────────
+                            let cur = self
+                                .builder
+                                .build_load(self.i64_type(), counter_ptr, "kill_count")
+                                .unwrap()
+                                .into_int_value();
+                            let next = self
+                                .builder
+                                .build_int_add(
+                                    cur,
+                                    self.i64_type().const_int(1, false),
+                                    "kill_count_next",
                                 )
                                 .unwrap();
-                            self.builder.build_unreachable().unwrap();
+                            self.builder.build_store(counter_ptr, next).unwrap();
+
+                            // ── Decide: restart or escalate ──────────────────
+                            let escalate_cond = self
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::UGE,
+                                    next,
+                                    self.i64_type().const_int(3, false),
+                                    "kill_escalate_cond",
+                                )
+                                .unwrap();
+
+                            let normal_bb = self
+                                .context
+                                .append_basic_block(self.current_fn.unwrap(), "kill_restart");
+                            let escalated_bb = self
+                                .context
+                                .append_basic_block(self.current_fn.unwrap(), "kill_escalate");
+                            self.builder
+                                .build_conditional_branch(escalate_cond, escalated_bb, normal_bb)
+                                .unwrap();
+
+                            // ── normal_bb: cleanup + restart ─────────────────
+                            self.builder.position_at_end(normal_bb);
+                            self.cleanup_to_depth(normal_depth);
+                            self.builder
+                                .build_unconditional_branch(recovery_bb)
+                                .unwrap();
+
+                            // ── escalated_bb: escalate to parent or Exit ──────
+                            self.builder.position_at_end(escalated_bb);
+                            if self.recovery_stack.len() >= 2 {
+                                let parent_recovery =
+                                    self.recovery_stack[self.recovery_stack.len() - 2];
+                                let parent_depth = self
+                                    .kill_cleanup_depth_stack
+                                    .get(self.kill_cleanup_depth_stack.len() - 2)
+                                    .copied()
+                                    .unwrap_or(0);
+                                let log_esc =
+                                    self.module.get_function("kyte_log_escalate").unwrap();
+                                let anc_ptr =
+                                    self.global_string_ptr("anchor", "esc_anc_name");
+                                self.builder
+                                    .build_call(log_esc, &[anc_ptr.into()], "")
+                                    .unwrap();
+                                self.cleanup_to_depth(parent_depth);
+                                self.builder
+                                    .build_unconditional_branch(parent_recovery)
+                                    .unwrap();
+                            } else {
+                                self.cleanup_to_depth(0);
+                                let exit_fn = self.module.get_function("exit").unwrap();
+                                self.builder
+                                    .build_call(
+                                        exit_fn,
+                                        &[self.context.i32_type().const_int(1, false).into()],
+                                        "",
+                                    )
+                                    .unwrap();
+                                self.builder.build_unreachable().unwrap();
+                            }
+                        } else {
+                            self.cleanup_to_depth(normal_depth);
+                            self.builder
+                                .build_unconditional_branch(recovery_bb)
+                                .unwrap();
                         }
-                    } else {
-                        // No counter (shouldn't happen in well-formed code) — just restart.
-                        self.cleanup_to_depth(normal_depth);
-                        self.builder
-                            .build_unconditional_branch(recovery_bb)
-                            .unwrap();
                     }
                 }
             }
@@ -522,13 +549,11 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.position_at_end(ok_bb);
             }
 
-            Stmt::InlineAnchor { name, body, .. } => {
+            Stmt::InlineAnchor { name, body, catch_param, catch_body, .. } => {
                 let func = self.current_fn.unwrap();
+                let has_catch = catch_body.is_some();
 
                 // ── Blocks ───────────────────────────────────────────────────
-                // anchor_loop_bb  : restart target (loop header)
-                // recovery_bb     : Kill jumps here, then restart
-                // merge_bb        : yield / normal completion lands here
                 let anchor_loop_bb = self
                     .context
                     .append_basic_block(func, &format!("anchor_loop_{}", name));
@@ -538,25 +563,43 @@ impl<'ctx> Codegen<'ctx> {
                 let merge_bb = self
                     .context
                     .append_basic_block(func, &format!("after_{}", name));
+                // catch block placed after hot path → cold block layout
+                let catch_bb_opt = if has_catch {
+                    Some(self.context.append_basic_block(func, &format!("catch_{}", name)))
+                } else {
+                    None
+                };
 
-                // Persist across restarts — allocate before the loop
+                // ── Allocas in entry block (persist across restarts) ──────────
                 let yield_alloca = self.build_alloca(&format!("{}_yield", name), &Ty::I64);
                 self.builder
                     .build_store(yield_alloca, self.i64_type().const_int(0, false))
                     .unwrap();
+                // kill_count only needed when no catch (optimization: eliminates
+                // load/add/store/icmp/br on every Kill when catch handles recovery)
                 let kill_count_alloca =
                     self.build_alloca(&format!("{}_kill_count", name), &Ty::I64);
                 self.builder
                     .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
                     .unwrap();
 
-                // Jump into the restart loop
+                // catch message slot: i8* alloca, default empty string
+                let catch_msg_slot = if has_catch {
+                    let slot = self.build_alloca(&format!("{}_catch_msg", name), &Ty::String);
+                    let empty = self.global_string_ptr("", "catch_empty");
+                    self.builder.build_store(slot, empty).unwrap();
+                    Some(slot)
+                } else {
+                    None
+                };
+
+                // ── Enter restart loop ────────────────────────────────────────
                 self.builder
                     .build_unconditional_branch(anchor_loop_bb)
                     .unwrap();
                 self.builder.position_at_end(anchor_loop_bb);
 
-                // sigsetjmp at loop header for signal recovery
+                // sigsetjmp — handles signal recovery (SIGFPE, etc.)
                 let enter_fn = self.module.get_function("kyte_anchor_enter").unwrap();
                 let jmp_ret = self
                     .builder
@@ -583,7 +626,7 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap();
                 self.builder.position_at_end(body_start);
 
-                // Push supervisor stacks
+                // ── Push supervisor stacks ────────────────────────────────────
                 self.recovery_stack.push(recovery_bb);
                 self.anchor_restart_bb_stack.push(anchor_loop_bb);
                 self.kill_cleanup_depth_stack
@@ -591,29 +634,72 @@ impl<'ctx> Codegen<'ctx> {
                 self.yield_slot.push(yield_alloca);
                 self.yield_merge_bb.push(merge_bb);
                 self.kill_count_slot.push(kill_count_alloca);
+                self.catch_bb_stack.push(catch_bb_opt);
+                self.catch_msg_slot_stack.push(catch_msg_slot);
 
                 let inline_exp_vaults = self.save_vault_count(name);
-
                 self.compile_stmts(body, params);
 
-                // Normal exit → merge (yield path also goes to merge_bb)
+                // Normal exit → merge
                 if self.no_terminator() {
                     self.builder.build_unconditional_branch(merge_bb).unwrap();
                 }
 
-                // Recovery block — Kill lands here, then loops back to restart
+                // ── Signal recovery block (SIGFPE etc.) → restart ─────────────
                 self.builder.position_at_end(recovery_bb);
                 self.emit_recovery_vault_assert(anchor_loop_bb, inline_exp_vaults, name);
 
-                // Pop supervisor stacks
+                // ── Pop supervisor stacks ─────────────────────────────────────
                 self.recovery_stack.pop();
                 self.anchor_restart_bb_stack.pop();
                 self.kill_cleanup_depth_stack.pop();
                 self.yield_slot.pop();
                 self.yield_merge_bb.pop();
                 self.kill_count_slot.pop();
+                self.catch_bb_stack.pop();
+                self.catch_msg_slot_stack.pop();
 
-                // After anchor: pop signal slot on clean exit
+                // ── Catch block (cold path) ───────────────────────────────────
+                if let (Some(catch_bb), Some(catch_stmts)) = (catch_bb_opt, catch_body.as_deref()) {
+                    self.builder.position_at_end(catch_bb);
+
+                    // Bind catch parameter as a local string variable
+                    let param_name = catch_param.as_deref().unwrap_or("_reason");
+                    if let Some(msg_slot) = catch_msg_slot {
+                        let msg_val = self
+                            .builder
+                            .build_load(self.ptr_type(), msg_slot, param_name)
+                            .unwrap();
+                        let param_alloca = self.build_alloca(param_name, &Ty::String);
+                        self.builder.build_store(param_alloca, msg_val).unwrap();
+                        self.variables.insert(param_name.to_string(), param_alloca);
+                        self.var_types.insert(param_name.to_string(), Ty::String);
+                    }
+
+                    // break inside catch → exit anchor (jump to merge_bb)
+                    let catch_start_depth = self.vault_scope_stack.len();
+                    let old_break_bb = self.break_bb.replace(merge_bb);
+                    let old_break_depth = self.break_cleanup_depth.replace(catch_start_depth);
+
+                    self.compile_stmts(catch_stmts, params);
+
+                    self.break_bb = old_break_bb;
+                    self.break_cleanup_depth = old_break_depth;
+
+                    // Remove catch param from scope
+                    self.variables.remove(param_name);
+                    self.var_types.remove(param_name);
+
+                    // Fallthrough (no break) → restart anchor
+                    if self.no_terminator() {
+                        self.cleanup_to_depth(catch_start_depth);
+                        self.builder
+                            .build_unconditional_branch(anchor_loop_bb)
+                            .unwrap();
+                    }
+                }
+
+                // ── After anchor: pop signal slot on clean exit ───────────────
                 self.builder.position_at_end(merge_bb);
                 let exit_fn_rt = self.module.get_function("kyte_anchor_exit").unwrap();
                 self.builder.build_call(exit_fn_rt, &[], "").unwrap();

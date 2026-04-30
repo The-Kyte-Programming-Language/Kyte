@@ -2,6 +2,34 @@ use crate::ast::*;
 use crate::parser::Parser;
 
 impl Parser {
+    // catch (string param) { body } 블록 파싱 헬퍼
+    fn parse_catch(&mut self) -> (Option<String>, Option<Vec<(Stmt, Span)>>) {
+        if self.current() != &Token::Catch {
+            return (None, None);
+        }
+        self.advance(); // consume 'catch'
+        self.expect(&Token::LParen);
+        // 선택적 타입 어노테이션 소비 (string, int 등)
+        match self.current() {
+            Token::String | Token::Int | Token::Float | Token::Bool
+            | Token::Auto | Token::TyI8 | Token::TyI16 | Token::TyI32 | Token::TyI64
+            | Token::TyU8 | Token::TyU16 | Token::TyU32 | Token::TyU64 => {
+                self.advance();
+            }
+            _ => {}
+        }
+        let param = if matches!(self.current(), Token::Ident(_)) {
+            Some(self.eat_ident())
+        } else {
+            None
+        };
+        self.expect(&Token::RParen);
+        self.expect(&Token::LBrace);
+        let body = self.parse_body();
+        self.expect(&Token::RBrace);
+        (param, Some(body))
+    }
+
     // 앵커 종류 파싱 (공통 헬퍼)
     pub(super) fn parse_anchor_kind(&mut self) -> AnchorKind {
         // 빈 앵커: @name()
@@ -44,7 +72,8 @@ impl Parser {
         let body = self.parse_body();
         self.expect(&Token::RBrace);
 
-        (Stmt::InlineAnchor { name, kind, body }, span)
+        let (catch_param, catch_body) = self.parse_catch();
+        (Stmt::InlineAnchor { name, kind, body, catch_param, catch_body }, span)
     }
 
     // 최상위 앵커 파싱 @이름(형태) — 중괄호 필수
@@ -71,12 +100,15 @@ impl Parser {
         }
         self.expect(&Token::RBrace);
 
+        let (catch_param, catch_body) = self.parse_catch();
         (
             TopLevel::Anchor {
                 name,
                 kind,
                 body,
                 children,
+                catch_param,
+                catch_body,
             },
             span,
         )
@@ -104,12 +136,15 @@ impl Parser {
         }
         self.expect(&Token::RBrace);
 
+        let (catch_param, catch_body) = self.parse_catch();
         (
             TopLevel::Anchor {
                 name,
                 kind,
                 body,
                 children,
+                catch_param,
+                catch_body,
             },
             span,
         )

@@ -446,7 +446,24 @@ for i in 0..10 {\n\
     print(i);\n\
 }\n\
 ```",
-        "break" => "**break** — exit the innermost loop",
+        "break" => "**break** — exit the innermost loop (or exit an anchor from inside a catch block)",
+        "catch" => "\
+**catch** — handle Kill or runtime errors in an anchor\n\n\
+```kyte\n\
+@task(plain) {\n\
+    risky_op();\n\
+    Kill \"something went wrong\";\n\
+} catch (string reason) {\n\
+    print(reason);   // inspect the Kill message\n\
+    // no break → anchor restarts automatically\n\
+    // break    → anchor exits permanently\n\
+    break;\n\
+}\n\
+```\n\
+**Semantics:**\n\
+- `Kill` or runtime error → always enters the catch block first\n\
+- Fallthrough (no `break`) → anchor restarts from the top\n\
+- `break` inside catch → anchor exits, no restart",
         "true"  => "**true** — boolean literal",
         "false" => "**false** — boolean literal",
         "as"    => "\

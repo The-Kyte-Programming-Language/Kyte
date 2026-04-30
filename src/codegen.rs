@@ -81,6 +81,11 @@ pub struct Codegen<'ctx> {
     /// 앵커별 Kill 발생 횟수 슬롯
     kill_count_slot: Vec<PointerValue<'ctx>>,
 
+    /// catch 블록 per-anchor (None = catch 없음) — Kill 라우팅용
+    catch_bb_stack: Vec<Option<inkwell::basic_block::BasicBlock<'ctx>>>,
+    /// catch 파라미터 메시지 슬롯 per-anchor (i8* alloca)
+    catch_msg_slot_stack: Vec<Option<PointerValue<'ctx>>>,
+
     /// Vault 런타임 카운터 (recovery assert용)
     vault_live_count: Option<PointerValue<'ctx>>,
 
@@ -137,6 +142,8 @@ impl<'ctx> Codegen<'ctx> {
             yield_slot: Vec::new(),
             yield_merge_bb: Vec::new(),
             kill_count_slot: Vec::new(),
+            catch_bb_stack: Vec::new(),
+            catch_msg_slot_stack: Vec::new(),
             vault_live_count: None,
             current_fn: None,
             debug_mode: true,

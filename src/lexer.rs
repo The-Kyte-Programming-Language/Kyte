@@ -306,6 +306,7 @@ impl Lexer {
             "mod" => Token::Mod,
             "const" => Token::Const,
             "import" => Token::Import,
+            "catch" => Token::Catch,
             "int" => Token::Int,
             "float" => Token::Float,
             "string" => Token::String,

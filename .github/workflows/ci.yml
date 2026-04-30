@@ -86,6 +86,18 @@ jobs:
             Write-Error "llvm-config.exe not found after extraction"
             exit 1
           }
+          # clang+llvm 아카이브는 libxml2s.lib 을 번들하지 않음.
+          # llvm-config --system-libs 가 libxml2s.lib 을 외부 정적 의존성으로 요구하므로
+          # vcpkg 로 설치하고 LLVM lib 디렉터리에 배치 (링커가 이미 /LIBPATH:C:\LLVM\lib 를 검색).
+          Write-Host "Installing libxml2 (static) via vcpkg..."
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          & "$vcpkgRoot\vcpkg.exe" install libxml2:x64-windows-static-md --no-print-usage
+          $vcpkgLib = "$vcpkgRoot\installed\x64-windows-static-md\lib"
+          # LLVM 이 기대하는 's' (static) 접미사로 복사
+          Copy-Item "$vcpkgLib\libxml2.lib" "$llvmDir\lib\libxml2s.lib"
+          # libxml2 의 전이 의존성(zlib 등)도 링커 검색 경로에 포함
+          Get-ChildItem "$vcpkgLib\*.lib" | Where-Object { $_.Name -ne "libxml2.lib" } |
+            ForEach-Object { Copy-Item $_.FullName "$llvmDir\lib\$($_.Name)" -Force }
           Add-Content -Path $env:GITHUB_ENV -Value "LLVM_SYS_211_PREFIX=$llvmDir"
           Add-Content -Path $env:GITHUB_PATH -Value "$llvmDir\bin"
           Write-Host "LLVM $ver ready at $llvmDir"

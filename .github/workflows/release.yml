@@ -117,6 +117,13 @@ jobs:
             Write-Error "llvm-config.exe not found after extraction"
             exit 1
           }
+          Write-Host "Installing libxml2 (static) via vcpkg..."
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          & "$vcpkgRoot\vcpkg.exe" install libxml2:x64-windows-static-md --no-print-usage
+          $vcpkgLib = "$vcpkgRoot\installed\x64-windows-static-md\lib"
+          Copy-Item "$vcpkgLib\libxml2.lib" "$llvmDir\lib\libxml2s.lib"
+          Get-ChildItem "$vcpkgLib\*.lib" | Where-Object { $_.Name -ne "libxml2.lib" } |
+            ForEach-Object { Copy-Item $_.FullName "$llvmDir\lib\$($_.Name)" -Force }
           Add-Content -Path $env:GITHUB_ENV -Value "LLVM_SYS_211_PREFIX=$llvmDir"
           Add-Content -Path $env:GITHUB_PATH -Value "$llvmDir\bin"
           Write-Host "LLVM $ver ready at $llvmDir"

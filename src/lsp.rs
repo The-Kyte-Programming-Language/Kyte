@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use lsp_server::{Connection, Message};
 use lsp_types::*;
 
+#[path = "lsp/code_actions.rs"]
+mod code_actions;
 #[path = "lsp/completion.rs"]
 mod completion;
 #[path = "lsp/definition.rs"]
@@ -28,20 +30,19 @@ mod util;
 
 use dispatch::{dispatch_notification, dispatch_request};
 
-// ────────────────────────────────────────────────────────────
-//  공개 진입점
-// ────────────────────────────────────────────────────────────
-
 pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     eprintln!("[kyte-lsp] starting …");
 
     let (conn, io) = Connection::stdio();
 
     let caps = serde_json::to_value(ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::FULL,
+        )),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec![".".into(), "@".into()]),
+            trigger_characters: Some(vec![".".into(), "@".into(), "(".into()]),
+            resolve_provider: Some(false),
             ..Default::default()
         }),
         definition_provider: Some(OneOf::Left(true)),
@@ -50,8 +51,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         document_symbol_provider: Some(OneOf::Left(true)),
         signature_help_provider: Some(SignatureHelpOptions {
             trigger_characters: Some(vec!["(".into(), ",".into()]),
+            retrigger_characters: Some(vec![",".into()]),
             ..Default::default()
         }),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![
+                CodeActionKind::QUICKFIX,
+                CodeActionKind::REFACTOR,
+            ]),
+            resolve_provider: Some(false),
+            ..Default::default()
+        })),
         ..Default::default()
     })?;
 

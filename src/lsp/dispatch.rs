@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use lsp_server::{Connection, Message, Notification, Response};
 use lsp_types::*;
 
+use super::code_actions::compute_code_actions;
 use super::completion::compute_completions;
 use super::definition::compute_definition;
 use super::diagnostics::send_diagnostics;
@@ -37,7 +38,6 @@ pub(super) fn dispatch_notification(
         "textDocument/didClose" => {
             let p: DidCloseTextDocumentParams = serde_json::from_value(not.params.clone())?;
             docs.remove(&p.text_document.uri);
-            // 닫힐 때 진단 비우기
             let empty = PublishDiagnosticsParams {
                 uri: p.text_document.uri,
                 diagnostics: vec![],
@@ -68,13 +68,16 @@ pub(super) fn dispatch_request(
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
+
         "textDocument/completion" => {
             let p: CompletionParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
-            let list = compute_completions(uri, docs.get(uri).map(|s: &String| s.as_str()));
+            let pos = p.text_document_position.position;
+            let list = compute_completions(uri, docs.get(uri).map(|s| s.as_str()), pos);
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), list)))?;
         }
+
         "textDocument/definition" => {
             let p: GotoDefinitionParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position_params.text_document.uri;
@@ -83,6 +86,7 @@ pub(super) fn dispatch_request(
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
+
         "textDocument/references" => {
             let p: ReferenceParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
@@ -91,17 +95,16 @@ pub(super) fn dispatch_request(
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
+
         "textDocument/rename" => {
             let p: RenameParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
             let pos = p.text_document_position.position;
-            let new_name = &p.new_name;
-            let result = docs
-                .get(uri)
-                .and_then(|t| compute_rename(t, pos, uri, new_name));
+            let result = docs.get(uri).and_then(|t| compute_rename(t, pos, uri, &p.new_name));
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
+
         "textDocument/documentSymbol" => {
             let p: DocumentSymbolParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document.uri;
@@ -109,6 +112,7 @@ pub(super) fn dispatch_request(
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
+
         "textDocument/signatureHelp" => {
             let p: SignatureHelpParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position_params.text_document.uri;
@@ -117,6 +121,19 @@ pub(super) fn dispatch_request(
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }
+
+        "textDocument/codeAction" => {
+            let p: CodeActionParams = serde_json::from_value(req.params.clone())?;
+            let uri = &p.text_document.uri;
+            let range = p.range;
+            let result: Vec<CodeActionOrCommand> = docs
+                .get(uri)
+                .map(|t| compute_code_actions(t, uri, range))
+                .unwrap_or_default();
+            conn.sender
+                .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
+        }
+
         _ => {
             conn.sender.send(Message::Response(Response::new_ok(
                 req.id.clone(),

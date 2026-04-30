@@ -131,7 +131,7 @@ fn parse_panic_position(msg: &str) -> Option<(u32, u32)> {
 fn to_diagnostic(e: &CompileError) -> Diagnostic {
     let line = e.span.line.saturating_sub(1) as u32;
     let col = e.span.col as u32;
-    let end_col = col + e.source_line.trim().len().max(1) as u32;
+    let end_col = col + e.span.len.max(1) as u32;
 
     Diagnostic {
         range: Range {

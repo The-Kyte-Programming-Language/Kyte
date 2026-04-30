@@ -464,6 +464,14 @@ for i in 0..10 {\n\
 - `Kill` or runtime error → always enters the catch block first\n\
 - Fallthrough (no `break`) → anchor restarts from the top\n\
 - `break` inside catch → anchor exits, no restart",
+        "emit" => "\
+**emit** — fire a named event synchronously\n\n\
+```kyte\n\
+emit(\"error\", \"connection lost\");  // with payload\n\
+emit(\"tick\");                         // no payload\n\
+```\n\
+All handlers registered for that event name run before `emit` returns.\n\
+Inside an event anchor, the payload is available as `_payload` (string).",
         "true"  => "**true** — boolean literal",
         "false" => "**false** — boolean literal",
         "as"    => "\

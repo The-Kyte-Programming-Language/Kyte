@@ -490,6 +490,9 @@ impl<'ctx> Codegen<'ctx> {
                             AnchorKind::Thread => {
                                 self.emit_thread_anchor(child_name, child_body, grandchildren);
                             }
+                            AnchorKind::Event(ev) => {
+                                self.emit_event_anchor(child_name, ev, child_body);
+                            }
                             _ => {
                                 self.emit_child_anchor(
                                     child_name,
@@ -689,6 +692,9 @@ impl<'ctx> Codegen<'ctx> {
                     AnchorKind::Thread => {
                         self.emit_thread_anchor(gc_name, gc_body, gc_children);
                     }
+                    AnchorKind::Event(ev) => {
+                        self.emit_event_anchor(gc_name, ev, gc_body);
+                    }
                     _ => {
                         self.emit_child_anchor(
                             gc_name,
@@ -755,6 +761,194 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_call(exit_fn, &[], "").unwrap();
     }
 
+    // ── Event anchor: register synchronous event handler ─────────────────────
+
+    pub(super) fn emit_event_anchor(
+        &mut self,
+        anchor_name: &str,
+        event_name: &str,
+        body: &[(Stmt, Span)],
+    ) {
+        if !self.no_terminator() {
+            return;
+        }
+
+        // Create a dedicated LLVM function for the handler body.
+        // Signature: void __kyte_event_<name>(ptr payload)
+        let body_fn_name = format!("__kyte_event_{}", anchor_name);
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(&[self.ptr_type().into()], false);
+        let body_fn = self.module.add_function(&body_fn_name, fn_type, None);
+
+        // Save outer codegen state
+        let outer_fn = self.current_fn;
+        let outer_vars = self.variables.clone();
+        let outer_types = self.var_types.clone();
+        let outer_vault_stack = self.vault_scope_stack.clone();
+        let outer_freed = self.freed_vault_vars.clone();
+        let outer_vlc = self.vault_live_count;
+        let outer_recovery = std::mem::take(&mut self.recovery_stack);
+        let outer_restart = std::mem::take(&mut self.anchor_restart_bb_stack);
+        let outer_kill_depth = std::mem::take(&mut self.kill_cleanup_depth_stack);
+        let outer_yield_slot = std::mem::take(&mut self.yield_slot);
+        let outer_yield_merge = std::mem::take(&mut self.yield_merge_bb);
+        let outer_kill_count = std::mem::take(&mut self.kill_count_slot);
+        let outer_catch_bb = std::mem::take(&mut self.catch_bb_stack);
+        let outer_catch_msg = std::mem::take(&mut self.catch_msg_slot_stack);
+        let outer_break_bb = self.break_bb;
+        let outer_break_depth = self.break_cleanup_depth;
+
+        // Compile the event handler function body
+        self.current_fn = Some(body_fn);
+        self.variables.clear();
+        self.var_types.clear();
+        self.vault_scope_stack.clear();
+        self.freed_vault_vars.clear();
+        self.break_bb = None;
+        self.break_cleanup_depth = None;
+
+        let entry = self.context.append_basic_block(body_fn, "entry");
+        let event_loop = self
+            .context
+            .append_basic_block(body_fn, &format!("event_loop_{}", anchor_name));
+        let event_recover = self
+            .context
+            .append_basic_block(body_fn, &format!("event_recover_{}", anchor_name));
+        let event_after = self
+            .context
+            .append_basic_block(body_fn, &format!("event_after_{}", anchor_name));
+
+        self.builder.position_at_end(entry);
+
+        // vault_live_count
+        let vlc = self.build_alloca("vault_live_count", &Ty::I64);
+        self.builder
+            .build_store(vlc, self.i64_type().const_int(0, false))
+            .unwrap();
+        self.vault_live_count = Some(vlc);
+
+        // Per-restart slots
+        let yield_alloca =
+            self.build_alloca(&format!("{}_yield", anchor_name), &Ty::I64);
+        self.builder
+            .build_store(yield_alloca, self.i64_type().const_int(0, false))
+            .unwrap();
+        let kill_count_alloca =
+            self.build_alloca(&format!("{}_kill_count", anchor_name), &Ty::I64);
+        self.builder
+            .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
+            .unwrap();
+
+        // _payload: alloca storing the function parameter (payload survives restarts)
+        let payload_param = body_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let payload_alloca = self.build_alloca("_payload", &Ty::String);
+        self.builder.build_store(payload_alloca, payload_param).unwrap();
+
+        self.builder.build_unconditional_branch(event_loop).unwrap();
+
+        // Restart loop
+        self.builder.position_at_end(event_loop);
+
+        let enter_fn = self.module.get_function("kyte_anchor_enter").unwrap();
+        let jmp_ret = self
+            .builder
+            .build_call(enter_fn, &[], &format!("{}_jmp", anchor_name))
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .unwrap()
+            .into_int_value();
+        let jmp_sig = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                jmp_ret,
+                self.context.i32_type().const_int(0, false),
+                &format!("{}_sig", anchor_name),
+            )
+            .unwrap();
+        let body_start = self
+            .context
+            .append_basic_block(body_fn, &format!("event_body_{}", anchor_name));
+        self.builder
+            .build_conditional_branch(jmp_sig, event_recover, body_start)
+            .unwrap();
+        self.builder.position_at_end(body_start);
+
+        // Inject _payload as a string variable visible in the handler body
+        self.variables.insert("_payload".to_string(), payload_alloca);
+        self.var_types.insert("_payload".to_string(), Ty::String);
+
+        self.recovery_stack.push(event_recover);
+        self.anchor_restart_bb_stack.push(event_loop);
+        self.kill_cleanup_depth_stack
+            .push(self.vault_scope_stack.len());
+        self.yield_slot.push(yield_alloca);
+        self.yield_merge_bb.push(event_after);
+        self.kill_count_slot.push(kill_count_alloca);
+        // No catch block at this level — Kill uses counter+escalation path
+        self.catch_bb_stack.push(None);
+        self.catch_msg_slot_stack.push(None);
+
+        let exp_vaults = self.save_vault_count(anchor_name);
+        self.compile_stmts(body, &[]);
+
+        if self.no_terminator() {
+            self.builder.build_unconditional_branch(event_after).unwrap();
+        }
+
+        // Signal recovery → restart
+        self.builder.position_at_end(event_recover);
+        self.emit_recovery_vault_assert(event_loop, exp_vaults, anchor_name);
+
+        self.recovery_stack.pop();
+        self.anchor_restart_bb_stack.pop();
+        self.kill_cleanup_depth_stack.pop();
+        self.yield_slot.pop();
+        self.yield_merge_bb.pop();
+        self.kill_count_slot.pop();
+        self.catch_bb_stack.pop();
+        self.catch_msg_slot_stack.pop();
+
+        self.builder.position_at_end(event_after);
+        let exit_fn_rt = self.module.get_function("kyte_anchor_exit").unwrap();
+        self.builder.build_call(exit_fn_rt, &[], "").unwrap();
+        self.builder.build_return(None).unwrap();
+
+        // Restore outer state
+        self.current_fn = outer_fn;
+        self.variables = outer_vars;
+        self.var_types = outer_types;
+        self.vault_scope_stack = outer_vault_stack;
+        self.freed_vault_vars = outer_freed;
+        self.vault_live_count = outer_vlc;
+        self.recovery_stack = outer_recovery;
+        self.anchor_restart_bb_stack = outer_restart;
+        self.kill_cleanup_depth_stack = outer_kill_depth;
+        self.yield_slot = outer_yield_slot;
+        self.yield_merge_bb = outer_yield_merge;
+        self.kill_count_slot = outer_kill_count;
+        self.catch_bb_stack = outer_catch_bb;
+        self.catch_msg_slot_stack = outer_catch_msg;
+        self.break_bb = outer_break_bb;
+        self.break_cleanup_depth = outer_break_depth;
+
+        // In the outer function: register the handler for event_name
+        if self.no_terminator() {
+            let register_fn = self.module.get_function("kyte_register_event").unwrap();
+            let ev_name_ptr = self
+                .global_string_ptr(event_name, &format!("ev_name_{}", anchor_name));
+            let fn_ptr = body_fn.as_global_value().as_pointer_value();
+            self.builder
+                .build_call(
+                    register_fn,
+                    &[ev_name_ptr.into(), fn_ptr.into()],
+                    "",
+                )
+                .unwrap();
+        }
+    }
+
     // ── Thread anchor: spawn supervised OS thread ─────────────────────────────
 
     pub(super) fn emit_thread_anchor(
@@ -787,6 +981,8 @@ impl<'ctx> Codegen<'ctx> {
         let outer_yield_slot = std::mem::take(&mut self.yield_slot);
         let outer_yield_merge = std::mem::take(&mut self.yield_merge_bb);
         let outer_kill_count = std::mem::take(&mut self.kill_count_slot);
+        let outer_catch_bb_th = std::mem::take(&mut self.catch_bb_stack);
+        let outer_catch_msg_th = std::mem::take(&mut self.catch_msg_slot_stack);
         let outer_break_bb = self.break_bb;
         let outer_break_depth = self.break_cleanup_depth;
 
@@ -863,6 +1059,8 @@ impl<'ctx> Codegen<'ctx> {
         self.yield_slot.push(yield_alloca);
         self.yield_merge_bb.push(thread_after);
         self.kill_count_slot.push(kill_count_alloca);
+        self.catch_bb_stack.push(None);
+        self.catch_msg_slot_stack.push(None);
 
         let exp_vaults = self.save_vault_count(anchor_name);
         self.compile_stmts(body, &[]);
@@ -883,6 +1081,8 @@ impl<'ctx> Codegen<'ctx> {
         self.yield_slot.pop();
         self.yield_merge_bb.pop();
         self.kill_count_slot.pop();
+        self.catch_bb_stack.pop();
+        self.catch_msg_slot_stack.pop();
 
         self.builder.position_at_end(thread_after);
         let exit_fn_rt = self.module.get_function("kyte_anchor_exit").unwrap();
@@ -902,6 +1102,8 @@ impl<'ctx> Codegen<'ctx> {
         self.yield_slot = outer_yield_slot;
         self.yield_merge_bb = outer_yield_merge;
         self.kill_count_slot = outer_kill_count;
+        self.catch_bb_stack = outer_catch_bb_th;
+        self.catch_msg_slot_stack = outer_catch_msg_th;
         self.break_bb = outer_break_bb;
         self.break_cleanup_depth = outer_break_depth;
 

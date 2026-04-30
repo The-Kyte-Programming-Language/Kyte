@@ -71,6 +71,29 @@ impl<'ctx> Codegen<'ctx> {
                     return self.i64_type().const_int(0, false).into();
                 }
 
+                // emit() — synchronous event dispatch
+                if name == "emit" {
+                    let emit_fn = self.module.get_function("kyte_emit_event").unwrap();
+                    let event_name_val = self.compile_expr(&args[0], params);
+                    let payload_ptr = if args.len() > 1 {
+                        let pv = self.compile_expr(&args[1], params);
+                        match pv {
+                            BasicValueEnum::PointerValue(p) => p,
+                            _ => self.global_string_ptr("", "emit_empty_payload"),
+                        }
+                    } else {
+                        self.global_string_ptr("", "emit_empty_payload")
+                    };
+                    self.builder
+                        .build_call(
+                            emit_fn,
+                            &[event_name_val.into(), payload_ptr.into()],
+                            "",
+                        )
+                        .unwrap();
+                    return self.i64_type().const_int(0, false).into();
+                }
+
                 // 함수 포인터 변수로 간주 (클로저 호출)
                 if !self.functions.contains_key(name) {
                     if let Some(&fn_ptr_alloca) = self.variables.get(name) {

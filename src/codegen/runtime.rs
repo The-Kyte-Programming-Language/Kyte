@@ -216,6 +216,40 @@ impl<'ctx> Codegen<'ctx> {
         );
     }
 
+    /// `void kyte_register_event(char*, fn*)` — register an event handler.
+    pub(super) fn declare_kyte_register_event(&mut self) {
+        if self.module.get_function("kyte_register_event").is_some() {
+            return;
+        }
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(
+            &[self.ptr_type().into(), self.ptr_type().into()],
+            false,
+        );
+        self.module.add_function(
+            "kyte_register_event",
+            fn_type,
+            Some(inkwell::module::Linkage::External),
+        );
+    }
+
+    /// `void kyte_emit_event(char*, char*)` — fire all handlers matching an event name.
+    pub(super) fn declare_kyte_emit_event(&mut self) {
+        if self.module.get_function("kyte_emit_event").is_some() {
+            return;
+        }
+        let void_type = self.context.void_type();
+        let fn_type = void_type.fn_type(
+            &[self.ptr_type().into(), self.ptr_type().into()],
+            false,
+        );
+        self.module.add_function(
+            "kyte_emit_event",
+            fn_type,
+            Some(inkwell::module::Linkage::External),
+        );
+    }
+
     /// `int kyte_spawn_thread_anchor(fn*, void*, int, char*)` — spawn a supervised thread.
     pub(super) fn declare_kyte_spawn_thread_anchor(&mut self) {
         if self
@@ -251,5 +285,7 @@ impl<'ctx> Codegen<'ctx> {
         self.declare_kyte_log_escalate();
         self.declare_kyte_log_restart();
         self.declare_kyte_spawn_thread_anchor();
+        self.declare_kyte_register_event();
+        self.declare_kyte_emit_event();
     }
 }

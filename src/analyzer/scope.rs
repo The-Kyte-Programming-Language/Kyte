@@ -211,21 +211,20 @@ impl Analyzer {
             ..
         } = anchor
         {
-            if matches!(kind, AnchorKind::Thread | AnchorKind::Event(_)) {
-                self.err(
-                    "E024",
-                    format!("Anchor kind '{:?}' is parsed but not implemented", kind),
-                    "Use plain @name() or @main(main) until runtime semantics are implemented"
-                        .to_string(),
-                );
-            }
             let saved = self.in_anchor;
             self.in_anchor = true;
             let mut scope = inherited.clone();
             // 전역 상수를 앵커 스코프에 주입
             let global_consts = self.global_consts.clone();
-            for (name, info) in &global_consts {
-                scope.entry(name.clone()).or_insert_with(|| info.clone());
+            for (cname, info) in &global_consts {
+                scope.entry(cname.clone()).or_insert_with(|| info.clone());
+            }
+            // Event anchor: inject implicit _payload string variable
+            if matches!(kind, AnchorKind::Event(_)) {
+                scope.insert(
+                    "_payload".to_string(),
+                    crate::analyzer::shared::VarInfo { ty: Ty::String, is_vault: false },
+                );
             }
             for (stmt, sp) in body {
                 self.current_span = *sp;

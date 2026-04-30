@@ -245,6 +245,45 @@ void kyte_log_restart(const char *anchor_name, int attempt) {
     (void)fprintf(stderr, "[kyte:restart] %s (attempt %d)\n", anchor_name, attempt);
 }
 
+/* ── Event dispatch table ────────────────────────────────────────────────────── */
+/*
+ * Synchronous event system: emit() calls all matching handlers in the
+ * calling thread before returning.  Handlers have their own anchor
+ * restart loop (Kill / recovery) and run to completion per invocation.
+ */
+
+#define KYTE_MAX_EVENTS 64
+
+typedef void (*KyteEventHandler)(const char *payload);
+
+typedef struct {
+    char             name[64];
+    KyteEventHandler handler;
+} KyteEventEntry;
+
+static KyteEventEntry kyte_event_table[KYTE_MAX_EVENTS];
+static int            kyte_event_count = 0;
+
+void kyte_register_event(const char *name, KyteEventHandler handler) {
+    if (kyte_event_count >= KYTE_MAX_EVENTS) {
+        (void)fprintf(stderr, "[kyte] event table full — cannot register '%s'\n", name);
+        return;
+    }
+    strncpy(kyte_event_table[kyte_event_count].name, name, 63);
+    kyte_event_table[kyte_event_count].name[63] = '\0';
+    kyte_event_table[kyte_event_count].handler   = handler;
+    kyte_event_count++;
+}
+
+void kyte_emit_event(const char *name, const char *payload) {
+    const char *safe_payload = payload ? payload : "";
+    for (int i = 0; i < kyte_event_count; i++) {
+        if (strcmp(kyte_event_table[i].name, name) == 0) {
+            kyte_event_table[i].handler(safe_payload);
+        }
+    }
+}
+
 /* ── Thread-supervised anchors (@anchor(thread)) ─────────────────────────────── */
 
 typedef struct {

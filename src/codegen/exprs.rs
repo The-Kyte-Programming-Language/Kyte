@@ -85,11 +85,7 @@ impl<'ctx> Codegen<'ctx> {
                         self.global_string_ptr("", "emit_empty_payload")
                     };
                     self.builder
-                        .build_call(
-                            emit_fn,
-                            &[event_name_val.into(), payload_ptr.into()],
-                            "",
-                        )
+                        .build_call(emit_fn, &[event_name_val.into(), payload_ptr.into()], "")
                         .unwrap();
                     return self.i64_type().const_int(0, false).into();
                 }

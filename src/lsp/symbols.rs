@@ -23,10 +23,20 @@ pub(super) fn compute_document_symbols(text: &str, _uri: &Uri) -> DocumentSymbol
 
 fn line_range(lines: &[&str], line_1: usize) -> Range {
     let ln = line_1.saturating_sub(1) as u32;
-    let len = lines.get(ln as usize).map(|l| l.len() as u32).unwrap_or(1).max(1);
+    let len = lines
+        .get(ln as usize)
+        .map(|l| l.len() as u32)
+        .unwrap_or(1)
+        .max(1);
     Range {
-        start: Position { line: ln, character: 0 },
-        end: Position { line: ln, character: len },
+        start: Position {
+            line: ln,
+            character: 0,
+        },
+        end: Position {
+            line: ln,
+            character: len,
+        },
     }
 }
 
@@ -37,8 +47,14 @@ fn name_range(lines: &[&str], line_1: usize, name: &str) -> Range {
         .and_then(|l| l.find(name).map(|c| c as u32))
         .unwrap_or(0);
     Range {
-        start: Position { line: ln, character: col },
-        end: Position { line: ln, character: col + name.len() as u32 },
+        start: Position {
+            line: ln,
+            character: col,
+        },
+        end: Position {
+            line: ln,
+            character: col + name.len() as u32,
+        },
     }
 }
 
@@ -49,11 +65,18 @@ fn build_symbol(
 ) -> Option<DocumentSymbol> {
     #[allow(deprecated)]
     match item {
-        TopLevel::Function { name, params, return_ty, .. } => {
-            let ps: Vec<String> = params.iter()
+        TopLevel::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } => {
+            let ps: Vec<String> = params
+                .iter()
                 .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
                 .collect();
-            let ret = return_ty.as_ref()
+            let ret = return_ty
+                .as_ref()
                 .map(|t| format!(" -> {}", ty_str(t)))
                 .unwrap_or_default();
             Some(DocumentSymbol {
@@ -69,8 +92,9 @@ fn build_symbol(
         }
 
         TopLevel::Struct { name, fields } => {
-            let children: Vec<DocumentSymbol> = fields.iter().map(|f| {
-                DocumentSymbol {
+            let children: Vec<DocumentSymbol> = fields
+                .iter()
+                .map(|f| DocumentSymbol {
                     name: f.name.clone(),
                     detail: Some(ty_str(&f.ty)),
                     kind: SymbolKind::FIELD,
@@ -79,8 +103,8 @@ fn build_symbol(
                     range: line_range(lines, span.line),
                     selection_range: line_range(lines, span.line),
                     children: None,
-                }
-            }).collect();
+                })
+                .collect();
             Some(DocumentSymbol {
                 name: name.clone(),
                 detail: Some(format!("struct {}", name)),
@@ -94,8 +118,9 @@ fn build_symbol(
         }
 
         TopLevel::Enum { name, variants } => {
-            let children: Vec<DocumentSymbol> = variants.iter().map(|v| {
-                DocumentSymbol {
+            let children: Vec<DocumentSymbol> = variants
+                .iter()
+                .map(|v| DocumentSymbol {
                     name: v.name.clone(),
                     detail: v.ty.as_ref().map(|t| ty_str(t)),
                     kind: SymbolKind::ENUM_MEMBER,
@@ -104,8 +129,8 @@ fn build_symbol(
                     range: line_range(lines, span.line),
                     selection_range: line_range(lines, span.line),
                     children: None,
-                }
-            }).collect();
+                })
+                .collect();
             Some(DocumentSymbol {
                 name: name.clone(),
                 detail: Some(format!("enum {}", name)),
@@ -119,21 +144,26 @@ fn build_symbol(
         }
 
         TopLevel::Trait { name, methods } => {
-            let children: Vec<DocumentSymbol> = methods.iter().map(|m| {
-                let ps: Vec<String> = m.params.iter()
-                    .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
-                    .collect();
-                DocumentSymbol {
-                    name: m.name.clone(),
-                    detail: Some(format!("fn({})", ps.join(", "))),
-                    kind: SymbolKind::METHOD,
-                    tags: None,
-                    deprecated: None,
-                    range: line_range(lines, span.line),
-                    selection_range: line_range(lines, span.line),
-                    children: None,
-                }
-            }).collect();
+            let children: Vec<DocumentSymbol> = methods
+                .iter()
+                .map(|m| {
+                    let ps: Vec<String> = m
+                        .params
+                        .iter()
+                        .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
+                        .collect();
+                    DocumentSymbol {
+                        name: m.name.clone(),
+                        detail: Some(format!("fn({})", ps.join(", "))),
+                        kind: SymbolKind::METHOD,
+                        tags: None,
+                        deprecated: None,
+                        range: line_range(lines, span.line),
+                        selection_range: line_range(lines, span.line),
+                        children: None,
+                    }
+                })
+                .collect();
             Some(DocumentSymbol {
                 name: name.clone(),
                 detail: Some(format!("trait {}", name)),
@@ -147,7 +177,8 @@ fn build_symbol(
         }
 
         TopLevel::Module { name, items } => {
-            let children: Vec<DocumentSymbol> = items.iter()
+            let children: Vec<DocumentSymbol> = items
+                .iter()
                 .filter_map(|(i, s)| build_symbol(i, s, lines))
                 .collect();
             Some(DocumentSymbol {
@@ -181,21 +212,24 @@ fn build_symbol(
             })
         }
 
-        TopLevel::ConstDecl { ty, name, .. } => {
-            Some(DocumentSymbol {
-                name: name.clone(),
-                detail: Some(format!("const {}", ty_str(ty))),
-                kind: SymbolKind::CONSTANT,
-                tags: None,
-                deprecated: None,
-                range: line_range(lines, span.line),
-                selection_range: name_range(lines, span.line, name),
-                children: None,
-            })
-        }
+        TopLevel::ConstDecl { ty, name, .. } => Some(DocumentSymbol {
+            name: name.clone(),
+            detail: Some(format!("const {}", ty_str(ty))),
+            kind: SymbolKind::CONSTANT,
+            tags: None,
+            deprecated: None,
+            range: line_range(lines, span.line),
+            selection_range: name_range(lines, span.line, name),
+            children: None,
+        }),
 
-        TopLevel::Impl { trait_name, target_ty, methods } => {
-            let children: Vec<DocumentSymbol> = methods.iter()
+        TopLevel::Impl {
+            trait_name,
+            target_ty,
+            methods,
+        } => {
+            let children: Vec<DocumentSymbol> = methods
+                .iter()
                 .filter_map(|(i, s)| build_symbol(i, s, lines))
                 .collect();
             Some(DocumentSymbol {

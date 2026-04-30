@@ -13,11 +13,7 @@ use crate::ast::TopLevel;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 
-pub(super) fn compute_completions(
-    uri: &Uri,
-    text: Option<&str>,
-    pos: Position,
-) -> CompletionList {
+pub(super) fn compute_completions(uri: &Uri, text: Option<&str>, pos: Position) -> CompletionList {
     let src_text = text.unwrap_or("");
 
     // ── 컨텍스트 감지: 커서 앞 텍스트 ──────────────────────────────────────
@@ -31,7 +27,10 @@ pub(super) fn compute_completions(
         let base = extract_trailing_ident(&before_trimmed[..before_trimmed.len() - 1]);
         if !base.is_empty() {
             if let Some(items) = dot_completions(src_text, &base) {
-                return CompletionList { is_incomplete: false, items };
+                return CompletionList {
+                    is_incomplete: false,
+                    items,
+                };
             }
         }
     }
@@ -43,9 +42,7 @@ pub(super) fn compute_completions(
     items.extend(keyword_snippet_items());
 
     // 2. 현재 파일 함수 + struct + enum + const
-    if let Ok(decl_items) = catch_unwind(AssertUnwindSafe(|| {
-        extract_decl_completions(src_text)
-    })) {
+    if let Ok(decl_items) = catch_unwind(AssertUnwindSafe(|| extract_decl_completions(src_text))) {
         items.extend(decl_items);
     }
 
@@ -66,8 +63,8 @@ pub(super) fn compute_completions(
                 let path = base_dir.join(&rel);
                 let resolved = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
                 if seen.insert(resolved.clone()) {
-                    if let Ok(isrc) = fs::read_to_string(&resolved)
-                        .or_else(|_| fs::read_to_string(&path))
+                    if let Ok(isrc) =
+                        fs::read_to_string(&resolved).or_else(|_| fs::read_to_string(&path))
                     {
                         if let Ok(more) = catch_unwind(AssertUnwindSafe(|| {
                             extract_decl_completions_labeled(&isrc, &rel)
@@ -84,7 +81,10 @@ pub(super) fn compute_completions(
     let mut seen_labels: HashSet<String> = HashSet::new();
     items.retain(|i| seen_labels.insert(i.label.clone()));
 
-    CompletionList { is_incomplete: false, items }
+    CompletionList {
+        is_incomplete: false,
+        items,
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -100,24 +100,28 @@ fn dot_completions(text: &str, base: &str) -> Option<Vec<CompletionItem>> {
         for (item, _) in &ast.items {
             if let TopLevel::Enum { name, variants } = item {
                 if name == base {
-                    let items = variants.iter().map(|v| {
-                        let snip = if v.ty.is_some() {
-                            format!("{}.{}(${{1:value}})", name, v.name)
-                        } else {
-                            format!("{}.{}", name, v.name)
-                        };
-                        let detail = v.ty.as_ref()
-                            .map(|t| format!("({})", ty_str(t)))
-                            .unwrap_or_default();
-                        CompletionItem {
-                            label: v.name.clone(),
-                            kind: Some(CompletionItemKind::ENUM_MEMBER),
-                            detail: Some(format!("{}{}", v.name, detail)),
-                            insert_text: Some(snip),
-                            insert_text_format: Some(InsertTextFormat::SNIPPET),
-                            ..Default::default()
-                        }
-                    }).collect();
+                    let items = variants
+                        .iter()
+                        .map(|v| {
+                            let snip = if v.ty.is_some() {
+                                format!("{}.{}(${{1:value}})", name, v.name)
+                            } else {
+                                format!("{}.{}", name, v.name)
+                            };
+                            let detail =
+                                v.ty.as_ref()
+                                    .map(|t| format!("({})", ty_str(t)))
+                                    .unwrap_or_default();
+                            CompletionItem {
+                                label: v.name.clone(),
+                                kind: Some(CompletionItemKind::ENUM_MEMBER),
+                                detail: Some(format!("{}{}", v.name, detail)),
+                                insert_text: Some(snip),
+                                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                ..Default::default()
+                            }
+                        })
+                        .collect();
                     return Some(items);
                 }
             }
@@ -128,14 +132,17 @@ fn dot_completions(text: &str, base: &str) -> Option<Vec<CompletionItem>> {
         for (item, _) in &ast.items {
             if let TopLevel::Struct { name, fields } = item {
                 if *name == var_ty {
-                    let items = fields.iter().map(|f| CompletionItem {
-                        label: f.name.clone(),
-                        kind: Some(CompletionItemKind::FIELD),
-                        detail: Some(ty_str(&f.ty)),
-                        insert_text: Some(f.name.clone()),
-                        insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
-                        ..Default::default()
-                    }).collect();
+                    let items = fields
+                        .iter()
+                        .map(|f| CompletionItem {
+                            label: f.name.clone(),
+                            kind: Some(CompletionItemKind::FIELD),
+                            detail: Some(ty_str(&f.ty)),
+                            insert_text: Some(f.name.clone()),
+                            insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+                            ..Default::default()
+                        })
+                        .collect();
                     return Some(items);
                 }
             }
@@ -157,14 +164,24 @@ fn local_var_completions(text: &str, pos: Position) -> Vec<CompletionItem> {
         let trimmed = line.trim();
 
         for (prefix, ty_label) in &[
-            ("int ", "int"), ("float ", "float"), ("string ", "string"),
-            ("bool ", "bool"), ("auto ", "auto"),
-            ("i8 ", "i8"), ("i16 ", "i16"), ("i32 ", "i32"), ("i64 ", "i64"),
-            ("u8 ", "u8"), ("u16 ", "u16"), ("u32 ", "u32"), ("u64 ", "u64"),
+            ("int ", "int"),
+            ("float ", "float"),
+            ("string ", "string"),
+            ("bool ", "bool"),
+            ("auto ", "auto"),
+            ("i8 ", "i8"),
+            ("i16 ", "i16"),
+            ("i32 ", "i32"),
+            ("i64 ", "i64"),
+            ("u8 ", "u8"),
+            ("u16 ", "u16"),
+            ("u32 ", "u32"),
+            ("u64 ", "u64"),
         ] {
             for strip_prefix in &[*prefix, &format!("Vault {}", prefix)] {
                 if let Some(rest) = trimmed.strip_prefix(strip_prefix) {
-                    let var: String = rest.chars()
+                    let var: String = rest
+                        .chars()
                         .take_while(|c| c.is_alphanumeric() || *c == '_')
                         .collect();
                     if !var.is_empty() && seen.insert(var.clone()) {
@@ -183,7 +200,8 @@ fn local_var_completions(text: &str, pos: Position) -> Vec<CompletionItem> {
 
         // for 루프 변수
         if let Some(rest) = trimmed.strip_prefix("for ") {
-            let var: String = rest.chars()
+            let var: String = rest
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !var.is_empty() && seen.insert(var.clone()) {
@@ -247,14 +265,23 @@ fn extract_decl_completions_labeled(src: &str, file_label: &str) -> Vec<Completi
 
     for (item, _) in &ast.items {
         match item {
-            TopLevel::Function { name, params, return_ty, .. } => {
-                let ps: Vec<String> = params.iter()
+            TopLevel::Function {
+                name,
+                params,
+                return_ty,
+                ..
+            } => {
+                let ps: Vec<String> = params
+                    .iter()
                     .map(|p| format!("{} {}", ty_str(&p.ty), p.name))
                     .collect();
-                let ret = return_ty.as_ref()
+                let ret = return_ty
+                    .as_ref()
                     .map(|t| format!(" -> {}", ty_str(t)))
                     .unwrap_or_default();
-                let snippet_params: String = params.iter().enumerate()
+                let snippet_params: String = params
+                    .iter()
+                    .enumerate()
                     .map(|(i, p)| format!("${{{}:{}}}", i + 1, p.name))
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -268,7 +295,9 @@ fn extract_decl_completions_labeled(src: &str, file_label: &str) -> Vec<Completi
                 });
             }
             TopLevel::Struct { name, fields } => {
-                let field_snippets: String = fields.iter().enumerate()
+                let field_snippets: String = fields
+                    .iter()
+                    .enumerate()
                     .map(|(i, f)| format!("{}: ${{{}:value}}", f.name, i + 1))
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -420,46 +449,158 @@ fn keyword_snippet_items() -> Vec<CompletionItem> {
             "assert(${1:condition});",
             CompletionItemKind::FUNCTION,
         ),
-        ("int",    "64-bit signed integer",  "int",    CompletionItemKind::TYPE_PARAMETER),
-        ("float",  "64-bit float",           "float",  CompletionItemKind::TYPE_PARAMETER),
-        ("string", "UTF-8 string",           "string", CompletionItemKind::TYPE_PARAMETER),
-        ("bool",   "Boolean",                "bool",   CompletionItemKind::TYPE_PARAMETER),
-        ("i8",  "8-bit signed",   "i8",  CompletionItemKind::TYPE_PARAMETER),
-        ("i16", "16-bit signed",  "i16", CompletionItemKind::TYPE_PARAMETER),
-        ("i32", "32-bit signed",  "i32", CompletionItemKind::TYPE_PARAMETER),
-        ("i64", "64-bit signed",  "i64", CompletionItemKind::TYPE_PARAMETER),
-        ("u8",  "8-bit unsigned", "u8",  CompletionItemKind::TYPE_PARAMETER),
-        ("u16", "16-bit unsigned","u16", CompletionItemKind::TYPE_PARAMETER),
-        ("u32", "32-bit unsigned","u32", CompletionItemKind::TYPE_PARAMETER),
-        ("u64", "64-bit unsigned","u64", CompletionItemKind::TYPE_PARAMETER),
-        ("auto",   "Type inference",         "auto",   CompletionItemKind::KEYWORD),
-        ("Vault",  "Managed heap memory",    "Vault",  CompletionItemKind::KEYWORD),
-        ("return", "Return value",           "return $0;", CompletionItemKind::KEYWORD),
-        ("break",  "Exit loop",              "break;", CompletionItemKind::KEYWORD),
-        ("Kill",   "Terminate anchor",       "Kill \"${1:reason}\";", CompletionItemKind::KEYWORD),
-        ("Exit",   "Exit program",           "Exit;",  CompletionItemKind::KEYWORD),
-        ("yield",  "Yield from anchor",      "yield $0;", CompletionItemKind::KEYWORD),
-        ("true",   "Boolean true",           "true",   CompletionItemKind::CONSTANT),
-        ("false",  "Boolean false",          "false",  CompletionItemKind::CONSTANT),
-        ("catch", "Anchor error handler",
-         "catch (string ${1:reason}) {\n\t$0\n\tbreak;\n}",
-         CompletionItemKind::KEYWORD),
-        ("emit",   "Fire an event",
-         "emit(\"${1:event}\", \"${2:payload}\");",
-         CompletionItemKind::FUNCTION),
-        ("import", "Import source file",     "import \"${1:file.ky}\";", CompletionItemKind::KEYWORD),
-        ("as",     "Type cast",              "as ${1:type}", CompletionItemKind::KEYWORD),
-        ("const",  "Named constant",         "const ${1:int} ${2:NAME} = $0;", CompletionItemKind::KEYWORD),
+        (
+            "int",
+            "64-bit signed integer",
+            "int",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "float",
+            "64-bit float",
+            "float",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "string",
+            "UTF-8 string",
+            "string",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "bool",
+            "Boolean",
+            "bool",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "i8",
+            "8-bit signed",
+            "i8",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "i16",
+            "16-bit signed",
+            "i16",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "i32",
+            "32-bit signed",
+            "i32",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "i64",
+            "64-bit signed",
+            "i64",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "u8",
+            "8-bit unsigned",
+            "u8",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "u16",
+            "16-bit unsigned",
+            "u16",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "u32",
+            "32-bit unsigned",
+            "u32",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "u64",
+            "64-bit unsigned",
+            "u64",
+            CompletionItemKind::TYPE_PARAMETER,
+        ),
+        (
+            "auto",
+            "Type inference",
+            "auto",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "Vault",
+            "Managed heap memory",
+            "Vault",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "return",
+            "Return value",
+            "return $0;",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("break", "Exit loop", "break;", CompletionItemKind::KEYWORD),
+        (
+            "Kill",
+            "Terminate anchor",
+            "Kill \"${1:reason}\";",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("Exit", "Exit program", "Exit;", CompletionItemKind::KEYWORD),
+        (
+            "yield",
+            "Yield from anchor",
+            "yield $0;",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("true", "Boolean true", "true", CompletionItemKind::CONSTANT),
+        (
+            "false",
+            "Boolean false",
+            "false",
+            CompletionItemKind::CONSTANT,
+        ),
+        (
+            "catch",
+            "Anchor error handler",
+            "catch (string ${1:reason}) {\n\t$0\n\tbreak;\n}",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "emit",
+            "Fire an event",
+            "emit(\"${1:event}\", \"${2:payload}\");",
+            CompletionItemKind::FUNCTION,
+        ),
+        (
+            "import",
+            "Import source file",
+            "import \"${1:file.ky}\";",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "as",
+            "Type cast",
+            "as ${1:type}",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "const",
+            "Named constant",
+            "const ${1:int} ${2:NAME} = $0;",
+            CompletionItemKind::KEYWORD,
+        ),
     ];
 
-    snippets.iter().map(|&(label, detail, snippet, kind)| {
-        CompletionItem {
+    snippets
+        .iter()
+        .map(|&(label, detail, snippet, kind)| CompletionItem {
             label: label.into(),
             kind: Some(kind),
             detail: Some(detail.into()),
             insert_text: Some(snippet.into()),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
-        }
-    }).collect()
+        })
+        .collect()
 }

@@ -222,10 +222,7 @@ impl<'ctx> Codegen<'ctx> {
             return;
         }
         let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(
-            &[self.ptr_type().into(), self.ptr_type().into()],
-            false,
-        );
+        let fn_type = void_type.fn_type(&[self.ptr_type().into(), self.ptr_type().into()], false);
         self.module.add_function(
             "kyte_register_event",
             fn_type,
@@ -239,10 +236,7 @@ impl<'ctx> Codegen<'ctx> {
             return;
         }
         let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(
-            &[self.ptr_type().into(), self.ptr_type().into()],
-            false,
-        );
+        let fn_type = void_type.fn_type(&[self.ptr_type().into(), self.ptr_type().into()], false);
         self.module.add_function(
             "kyte_emit_event",
             fn_type,

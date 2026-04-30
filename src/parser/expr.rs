@@ -193,7 +193,11 @@ impl Parser {
                         }
                     }
                     self.expect(&Token::RParen);
-                    Expr::Call { name: s, args, span }
+                    Expr::Call {
+                        name: s,
+                        args,
+                        span,
+                    }
                 } else {
                     Expr::Ident(s, span)
                 }

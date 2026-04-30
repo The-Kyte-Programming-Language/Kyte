@@ -40,8 +40,14 @@ pub(super) fn compute_code_actions(
                         uri.clone(),
                         vec![TextEdit {
                             range: Range {
-                                start: Position { line: insert_line, character: 0 },
-                                end: Position { line: insert_line, character: 0 },
+                                start: Position {
+                                    line: insert_line,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: insert_line,
+                                    character: 0,
+                                },
                             },
                             new_text,
                         }],
@@ -50,7 +56,10 @@ pub(super) fn compute_code_actions(
                         title: format!("Declare 'int {} = 0'", var_name),
                         kind: Some(CodeActionKind::QUICKFIX),
                         diagnostics: Some(vec![diag.clone()]),
-                        edit: Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(changes),
+                            ..Default::default()
+                        }),
                         is_preferred: Some(true),
                         ..Default::default()
                     }));
@@ -68,8 +77,14 @@ pub(super) fn compute_code_actions(
                         uri.clone(),
                         vec![TextEdit {
                             range: Range {
-                                start: Position { line: insert_line, character: 0 },
-                                end: Position { line: insert_line, character: 0 },
+                                start: Position {
+                                    line: insert_line,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: insert_line,
+                                    character: 0,
+                                },
                             },
                             new_text,
                         }],
@@ -78,7 +93,10 @@ pub(super) fn compute_code_actions(
                         title: format!("Create function '{}'", fn_name),
                         kind: Some(CodeActionKind::QUICKFIX),
                         diagnostics: Some(vec![diag.clone()]),
-                        edit: Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(changes),
+                            ..Default::default()
+                        }),
                         is_preferred: Some(false),
                         ..Default::default()
                     }));
@@ -125,22 +143,43 @@ fn ranges_overlap(a: Range, b: Range) -> bool {
 fn extract_undeclared_var(msg: &str) -> Option<String> {
     // "Undeclared variable 'foo'"
     let after = msg.split('\'').nth(1)?;
-    let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-    if name.is_empty() { None } else { Some(name) }
+    let name: String = after
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 fn extract_undeclared_fn(msg: &str) -> Option<String> {
     // "Undeclared function 'foo'" or "Undeclared method 'foo'"
     let after = msg.split('\'').nth(1)?;
-    let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-    if name.is_empty() { None } else { Some(name) }
+    let name: String = after
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 fn extract_unused_var(msg: &str) -> Option<String> {
     // "Variable 'foo' is declared but never used"
     let after = msg.split('\'').nth(1)?;
-    let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-    if name.is_empty() { None } else { Some(name) }
+    let name: String = after
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 fn indentation_at(text: &str, line_idx: usize) -> String {
@@ -166,27 +205,41 @@ fn find_insert_line_for_fn(text: &str, before_line: u32) -> u32 {
 }
 
 fn rename_in_text(text: &str, uri: &Uri, old: &str, new: &str) -> Option<WorkspaceEdit> {
-    let edits: Vec<TextEdit> = text.lines().enumerate().flat_map(|(li, line)| {
-        let mut col = 0usize;
-        let mut result = Vec::new();
-        while let Some(off) = line[col..].find(old) {
-            let abs = col + off;
-            let before_ok = abs == 0 || !line.as_bytes()[abs - 1].is_ascii_alphanumeric() && line.as_bytes()[abs - 1] != b'_';
-            let after_pos = abs + old.len();
-            let after_ok = after_pos >= line.len() || !line.as_bytes()[after_pos].is_ascii_alphanumeric() && line.as_bytes()[after_pos] != b'_';
-            if before_ok && after_ok {
-                result.push(TextEdit {
-                    range: Range {
-                        start: Position { line: li as u32, character: abs as u32 },
-                        end: Position { line: li as u32, character: after_pos as u32 },
-                    },
-                    new_text: new.to_string(),
-                });
+    let edits: Vec<TextEdit> = text
+        .lines()
+        .enumerate()
+        .flat_map(|(li, line)| {
+            let mut col = 0usize;
+            let mut result = Vec::new();
+            while let Some(off) = line[col..].find(old) {
+                let abs = col + off;
+                let before_ok = abs == 0
+                    || !line.as_bytes()[abs - 1].is_ascii_alphanumeric()
+                        && line.as_bytes()[abs - 1] != b'_';
+                let after_pos = abs + old.len();
+                let after_ok = after_pos >= line.len()
+                    || !line.as_bytes()[after_pos].is_ascii_alphanumeric()
+                        && line.as_bytes()[after_pos] != b'_';
+                if before_ok && after_ok {
+                    result.push(TextEdit {
+                        range: Range {
+                            start: Position {
+                                line: li as u32,
+                                character: abs as u32,
+                            },
+                            end: Position {
+                                line: li as u32,
+                                character: after_pos as u32,
+                            },
+                        },
+                        new_text: new.to_string(),
+                    });
+                }
+                col = abs + old.len().max(1);
             }
-            col = abs + old.len().max(1);
-        }
-        result
-    }).collect();
+            result
+        })
+        .collect();
 
     if edits.is_empty() {
         return None;
@@ -194,5 +247,8 @@ fn rename_in_text(text: &str, uri: &Uri, old: &str, new: &str) -> Option<Workspa
     #[allow(clippy::mutable_key_type)]
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), edits);
-    Some(WorkspaceEdit { changes: Some(changes), ..Default::default() })
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        ..Default::default()
+    })
 }

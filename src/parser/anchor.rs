@@ -11,9 +11,19 @@ impl Parser {
         self.expect(&Token::LParen);
         // 선택적 타입 어노테이션 소비 (string, int 등)
         match self.current() {
-            Token::String | Token::Int | Token::Float | Token::Bool
-            | Token::Auto | Token::TyI8 | Token::TyI16 | Token::TyI32 | Token::TyI64
-            | Token::TyU8 | Token::TyU16 | Token::TyU32 | Token::TyU64 => {
+            Token::String
+            | Token::Int
+            | Token::Float
+            | Token::Bool
+            | Token::Auto
+            | Token::TyI8
+            | Token::TyI16
+            | Token::TyI32
+            | Token::TyI64
+            | Token::TyU8
+            | Token::TyU16
+            | Token::TyU32
+            | Token::TyU64 => {
                 self.advance();
             }
             _ => {}
@@ -73,7 +83,16 @@ impl Parser {
         self.expect(&Token::RBrace);
 
         let (catch_param, catch_body) = self.parse_catch();
-        (Stmt::InlineAnchor { name, kind, body, catch_param, catch_body }, span)
+        (
+            Stmt::InlineAnchor {
+                name,
+                kind,
+                body,
+                catch_param,
+                catch_body,
+            },
+            span,
+        )
     }
 
     // 최상위 앵커 파싱 @이름(형태) — 중괄호 필수

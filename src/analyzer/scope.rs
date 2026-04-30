@@ -223,7 +223,10 @@ impl Analyzer {
             if matches!(kind, AnchorKind::Event(_)) {
                 scope.insert(
                     "_payload".to_string(),
-                    crate::analyzer::shared::VarInfo { ty: Ty::String, is_vault: false },
+                    crate::analyzer::shared::VarInfo {
+                        ty: Ty::String,
+                        is_vault: false,
+                    },
                 );
             }
             for (stmt, sp) in body {

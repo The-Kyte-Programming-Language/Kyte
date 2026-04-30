@@ -383,8 +383,7 @@ impl<'ctx> Codegen<'ctx> {
                     if let Some(Some(msg_slot)) = self.catch_msg_slot_stack.last().copied() {
                         self.builder.build_store(msg_slot, kill_msg_ptr).unwrap();
                     }
-                    let cleanup_depth =
-                        self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
+                    let cleanup_depth = self.kill_cleanup_depth_stack.last().copied().unwrap_or(0);
                     self.cleanup_to_depth(cleanup_depth);
                     self.builder.build_unconditional_branch(catch_bb).unwrap();
                 } else {
@@ -457,8 +456,7 @@ impl<'ctx> Codegen<'ctx> {
                                     .unwrap_or(0);
                                 let log_esc =
                                     self.module.get_function("kyte_log_escalate").unwrap();
-                                let anc_ptr =
-                                    self.global_string_ptr("anchor", "esc_anc_name");
+                                let anc_ptr = self.global_string_ptr("anchor", "esc_anc_name");
                                 self.builder
                                     .build_call(log_esc, &[anc_ptr.into()], "")
                                     .unwrap();
@@ -549,7 +547,13 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.position_at_end(ok_bb);
             }
 
-            Stmt::InlineAnchor { name, body, catch_param, catch_body, .. } => {
+            Stmt::InlineAnchor {
+                name,
+                body,
+                catch_param,
+                catch_body,
+                ..
+            } => {
                 let func = self.current_fn.unwrap();
                 let has_catch = catch_body.is_some();
 
@@ -565,7 +569,10 @@ impl<'ctx> Codegen<'ctx> {
                     .append_basic_block(func, &format!("after_{}", name));
                 // catch block placed after hot path → cold block layout
                 let catch_bb_opt = if has_catch {
-                    Some(self.context.append_basic_block(func, &format!("catch_{}", name)))
+                    Some(
+                        self.context
+                            .append_basic_block(func, &format!("catch_{}", name)),
+                    )
                 } else {
                     None
                 };

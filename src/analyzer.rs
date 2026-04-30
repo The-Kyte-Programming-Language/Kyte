@@ -65,7 +65,11 @@ impl Analyzer {
             structs: HashMap::new(),
             enums: HashMap::new(),
             source_lines,
-            current_span: Span { line: 0, col: 0, len: 1 },
+            current_span: Span {
+                line: 0,
+                col: 0,
+                len: 1,
+            },
             in_anchor: false,
             used_vars: HashSet::new(),
             declared_vars: Vec::new(),
@@ -108,14 +112,22 @@ impl Analyzer {
             }
         }
         if main_count == 0 {
-            a.current_span = first_item_span.unwrap_or(Span { line: 1, col: 0, len: 1 });
+            a.current_span = first_item_span.unwrap_or(Span {
+                line: 1,
+                col: 0,
+                len: 1,
+            });
             a.err(
                 "E018",
                 "Missing @...(main) anchor".to_string(),
                 "Add a top-level main anchor, e.g. @main(main)".to_string(),
             );
         } else if main_count > 1 {
-            a.current_span = first_item_span.unwrap_or(Span { line: 1, col: 0, len: 1 });
+            a.current_span = first_item_span.unwrap_or(Span {
+                line: 1,
+                col: 0,
+                len: 1,
+            });
             a.err(
                 "E019",
                 format!("Multiple main anchors found ({})", main_count),

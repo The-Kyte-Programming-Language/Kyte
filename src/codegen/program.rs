@@ -530,8 +530,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.catch_msg_slot_stack.pop();
 
                 // ── catch block (cold path) ───────────────────────────────────
-                if let (Some(catch_bb), Some(catch_stmts)) =
-                    (main_catch_bb, catch_body.as_deref())
+                if let (Some(catch_bb), Some(catch_stmts)) = (main_catch_bb, catch_body.as_deref())
                 {
                     self.builder.position_at_end(catch_bb);
                     let param_name = catch_param.as_deref().unwrap_or("_reason");
@@ -555,9 +554,7 @@ impl<'ctx> Codegen<'ctx> {
                     self.var_types.remove(param_name);
                     if self.no_terminator() {
                         self.cleanup_to_depth(catch_start_depth);
-                        self.builder
-                            .build_unconditional_branch(main_loop)
-                            .unwrap();
+                        self.builder.build_unconditional_branch(main_loop).unwrap();
                     }
                 }
 
@@ -603,7 +600,10 @@ impl<'ctx> Codegen<'ctx> {
             .context
             .append_basic_block(func, &format!("after_{}", child_name));
         let child_catch_bb = if catch_body.is_some() {
-            Some(self.context.append_basic_block(func, &format!("catch_{}", child_name)))
+            Some(
+                self.context
+                    .append_basic_block(func, &format!("catch_{}", child_name)),
+            )
         } else {
             None
         };
@@ -612,8 +612,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder
             .build_store(yield_alloca, self.i64_type().const_int(0, false))
             .unwrap();
-        let kill_count_alloca =
-            self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
+        let kill_count_alloca = self.build_alloca(&format!("{}_kill_count", child_name), &Ty::I64);
         self.builder
             .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
             .unwrap();
@@ -828,13 +827,11 @@ impl<'ctx> Codegen<'ctx> {
         self.vault_live_count = Some(vlc);
 
         // Per-restart slots
-        let yield_alloca =
-            self.build_alloca(&format!("{}_yield", anchor_name), &Ty::I64);
+        let yield_alloca = self.build_alloca(&format!("{}_yield", anchor_name), &Ty::I64);
         self.builder
             .build_store(yield_alloca, self.i64_type().const_int(0, false))
             .unwrap();
-        let kill_count_alloca =
-            self.build_alloca(&format!("{}_kill_count", anchor_name), &Ty::I64);
+        let kill_count_alloca = self.build_alloca(&format!("{}_kill_count", anchor_name), &Ty::I64);
         self.builder
             .build_store(kill_count_alloca, self.i64_type().const_int(0, false))
             .unwrap();
@@ -842,7 +839,9 @@ impl<'ctx> Codegen<'ctx> {
         // _payload: alloca storing the function parameter (payload survives restarts)
         let payload_param = body_fn.get_nth_param(0).unwrap().into_pointer_value();
         let payload_alloca = self.build_alloca("_payload", &Ty::String);
-        self.builder.build_store(payload_alloca, payload_param).unwrap();
+        self.builder
+            .build_store(payload_alloca, payload_param)
+            .unwrap();
 
         self.builder.build_unconditional_branch(event_loop).unwrap();
 
@@ -876,7 +875,8 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(body_start);
 
         // Inject _payload as a string variable visible in the handler body
-        self.variables.insert("_payload".to_string(), payload_alloca);
+        self.variables
+            .insert("_payload".to_string(), payload_alloca);
         self.var_types.insert("_payload".to_string(), Ty::String);
 
         self.recovery_stack.push(event_recover);
@@ -894,7 +894,9 @@ impl<'ctx> Codegen<'ctx> {
         self.compile_stmts(body, &[]);
 
         if self.no_terminator() {
-            self.builder.build_unconditional_branch(event_after).unwrap();
+            self.builder
+                .build_unconditional_branch(event_after)
+                .unwrap();
         }
 
         // Signal recovery → restart
@@ -936,15 +938,11 @@ impl<'ctx> Codegen<'ctx> {
         // In the outer function: register the handler for event_name
         if self.no_terminator() {
             let register_fn = self.module.get_function("kyte_register_event").unwrap();
-            let ev_name_ptr = self
-                .global_string_ptr(event_name, &format!("ev_name_{}", anchor_name));
+            let ev_name_ptr =
+                self.global_string_ptr(event_name, &format!("ev_name_{}", anchor_name));
             let fn_ptr = body_fn.as_global_value().as_pointer_value();
             self.builder
-                .build_call(
-                    register_fn,
-                    &[ev_name_ptr.into(), fn_ptr.into()],
-                    "",
-                )
+                .build_call(register_fn, &[ev_name_ptr.into(), fn_ptr.into()], "")
                 .unwrap();
         }
     }

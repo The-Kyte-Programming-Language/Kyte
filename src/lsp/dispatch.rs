@@ -100,7 +100,9 @@ pub(super) fn dispatch_request(
             let p: RenameParams = serde_json::from_value(req.params.clone())?;
             let uri = &p.text_document_position.text_document.uri;
             let pos = p.text_document_position.position;
-            let result = docs.get(uri).and_then(|t| compute_rename(t, pos, uri, &p.new_name));
+            let result = docs
+                .get(uri)
+                .and_then(|t| compute_rename(t, pos, uri, &p.new_name));
             conn.sender
                 .send(Message::Response(Response::new_ok(req.id.clone(), result)))?;
         }

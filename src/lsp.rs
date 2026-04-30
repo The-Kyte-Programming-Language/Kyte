@@ -36,9 +36,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (conn, io) = Connection::stdio();
 
     let caps = serde_json::to_value(ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::FULL,
-        )),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![".".into(), "@".into(), "(".into()]),
@@ -55,10 +53,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ..Default::default()
         }),
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            code_action_kinds: Some(vec![
-                CodeActionKind::QUICKFIX,
-                CodeActionKind::REFACTOR,
-            ]),
+            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX, CodeActionKind::REFACTOR]),
             resolve_provider: Some(false),
             ..Default::default()
         })),

@@ -72,8 +72,14 @@ fn make_location(uri: &Uri, lines: &[&str], span_line: usize, name: &str) -> Loc
     Location {
         uri: uri.clone(),
         range: Range {
-            start: Position { line: line_0, character: col },
-            end: Position { line: line_0, character: col + name.len() as u32 },
+            start: Position {
+                line: line_0,
+                character: col,
+            },
+            end: Position {
+                line: line_0,
+                character: col + name.len() as u32,
+            },
         },
     }
 }
@@ -95,7 +101,10 @@ fn find_def_in_children(
         if found {
             return Some(make_location(uri, lines, span.line, word));
         }
-        if let TopLevel::Anchor { children: nested, .. } = item {
+        if let TopLevel::Anchor {
+            children: nested, ..
+        } = item
+        {
             if let Some(loc) = find_def_in_children(nested, word, uri, lines) {
                 return Some(loc);
             }
@@ -110,12 +119,13 @@ fn find_local_var_def(text: &str, name: &str, uri: &Uri) -> Option<Location> {
     for (line_idx, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         // 각 타입 뒤에 공백 + name이 등장하는지 확인
-        for prefix in &["int ", "float ", "string ", "bool ", "auto ",
-                        "i8 ", "i16 ", "i32 ", "i64 ",
-                        "u8 ", "u16 ", "u32 ", "u64 ",
-                        "Vault "] {
+        for prefix in &[
+            "int ", "float ", "string ", "bool ", "auto ", "i8 ", "i16 ", "i32 ", "i64 ", "u8 ",
+            "u16 ", "u32 ", "u64 ", "Vault ",
+        ] {
             if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let var_name: String = rest.chars()
+                let var_name: String = rest
+                    .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_')
                     .collect();
                 if var_name == name {
@@ -123,8 +133,14 @@ fn find_local_var_def(text: &str, name: &str, uri: &Uri) -> Option<Location> {
                     return Some(Location {
                         uri: uri.clone(),
                         range: Range {
-                            start: Position { line: line_idx as u32, character: col },
-                            end: Position { line: line_idx as u32, character: col + name.len() as u32 },
+                            start: Position {
+                                line: line_idx as u32,
+                                character: col,
+                            },
+                            end: Position {
+                                line: line_idx as u32,
+                                character: col + name.len() as u32,
+                            },
                         },
                     });
                 }
@@ -132,7 +148,8 @@ fn find_local_var_def(text: &str, name: &str, uri: &Uri) -> Option<Location> {
         }
         // `for i in ...` 패턴
         if let Some(rest) = trimmed.strip_prefix("for ") {
-            let var_name: String = rest.chars()
+            let var_name: String = rest
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if var_name == name {
@@ -140,8 +157,14 @@ fn find_local_var_def(text: &str, name: &str, uri: &Uri) -> Option<Location> {
                 return Some(Location {
                     uri: uri.clone(),
                     range: Range {
-                        start: Position { line: line_idx as u32, character: col },
-                        end: Position { line: line_idx as u32, character: col + name.len() as u32 },
+                        start: Position {
+                            line: line_idx as u32,
+                            character: col,
+                        },
+                        end: Position {
+                            line: line_idx as u32,
+                            character: col + name.len() as u32,
+                        },
                     },
                 });
             }

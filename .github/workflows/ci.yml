@@ -11,9 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  LLVM_VERSION: "21"
-  # Specific Windows installer version — update when a newer 21.x is released
-  LLVM_WIN_VERSION: "21.1.0"
+  LLVM_VERSION: "21.1"
 
 jobs:
   build:
@@ -43,53 +41,14 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      # ── LLVM 설치 (Linux / Debian / Ubuntu) ──────────────────────────────────
-      # llvm.sh: apt.llvm.org 공식 설치 스크립트 — Noble/Jammy/Bookworm 모두 지원
-      - name: Install LLVM (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
-          chmod +x /tmp/llvm.sh
-          sudo /tmp/llvm.sh ${{ env.LLVM_VERSION }} all
-          # libpolly: polyhedral optimizer (inkwell 요구)
-          sudo apt-get install -y libpolly-${{ env.LLVM_VERSION }}-dev 2>/dev/null || true
-          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-${{ env.LLVM_VERSION }}" >> $GITHUB_ENV
-          echo "/usr/lib/llvm-${{ env.LLVM_VERSION }}/bin" >> $GITHUB_PATH
-
-      # ── LLVM 설치 (macOS) ─────────────────────────────────────────────────────
-      - name: Install LLVM (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install llvm@${{ env.LLVM_VERSION }}
-          LLVM_PREFIX=$(brew --prefix llvm@${{ env.LLVM_VERSION }})
-          echo "LLVM_SYS_211_PREFIX=$LLVM_PREFIX" >> $GITHUB_ENV
-          echo "$LLVM_PREFIX/bin" >> $GITHUB_PATH
-
-      # ── LLVM 설치 (Windows / MSVC) ────────────────────────────────────────────
-      # GitHub Releases에서 공식 NSIS 인스톨러 사용 (/S = silent)
-      - name: Install LLVM (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ver = "${{ env.LLVM_WIN_VERSION }}"
-          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/LLVM-$ver-win64.exe"
-          $out = "$env:TEMP\llvm-$ver.exe"
-          Write-Host "Downloading LLVM $ver from $url"
-          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
-          Write-Host "Installing LLVM (silent)..."
-          $proc = Start-Process -FilePath $out -ArgumentList "/S" -PassThru -Wait
-          if ($proc.ExitCode -ne 0) {
-            Write-Error "LLVM installer exited with code $($proc.ExitCode)"
-            exit 1
-          }
-          # 설치 완료 확인
-          if (-not (Test-Path "C:\Program Files\LLVM\bin\clang.exe")) {
-            Write-Error "LLVM installation not found at expected path"
-            exit 1
-          }
-          echo "LLVM_SYS_211_PREFIX=C:\Program Files\LLVM" >> $env:GITHUB_ENV
-          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
-          Write-Host "LLVM $ver installed successfully."
+      # KyleMayes/install-llvm-action downloads the official clang+llvm pre-built
+      # archive (not the NSIS installer), extracts it, and sets LLVM_SYS_211_PREFIX
+      # automatically via `env: true` — works on Linux, macOS, and Windows.
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: ${{ env.LLVM_VERSION }}
+          env: true
 
       # ── 빌드 & 검사 ──────────────────────────────────────────────────────────
       - name: Check formatting

@@ -9,8 +9,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  LLVM_VERSION: "21"
-  LLVM_WIN_VERSION: "21.1.0"
+  LLVM_VERSION: "21.1"
 
 jobs:
   quality-gate:
@@ -26,14 +25,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install LLVM (Ubuntu/Debian)
-        run: |
-          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
-          chmod +x /tmp/llvm.sh
-          sudo /tmp/llvm.sh ${{ env.LLVM_VERSION }} all
-          sudo apt-get install -y libpolly-${{ env.LLVM_VERSION }}-dev 2>/dev/null || true
-          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-${{ env.LLVM_VERSION }}" >> $GITHUB_ENV
-          echo "/usr/lib/llvm-${{ env.LLVM_VERSION }}/bin" >> $GITHUB_PATH
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: ${{ env.LLVM_VERSION }}
+          env: true
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -79,39 +75,11 @@ jobs:
             target
           key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
-      # ── LLVM 설치 ─────────────────────────────────────────────────────────────
-      - name: Install LLVM (Linux / Debian / Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
-          chmod +x /tmp/llvm.sh
-          sudo /tmp/llvm.sh ${{ env.LLVM_VERSION }} all
-          sudo apt-get install -y libpolly-${{ env.LLVM_VERSION }}-dev 2>/dev/null || true
-          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-${{ env.LLVM_VERSION }}" >> $GITHUB_ENV
-          echo "/usr/lib/llvm-${{ env.LLVM_VERSION }}/bin" >> $GITHUB_PATH
-
-      - name: Install LLVM (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install llvm@${{ env.LLVM_VERSION }}
-          LLVM_PREFIX=$(brew --prefix llvm@${{ env.LLVM_VERSION }})
-          echo "LLVM_SYS_211_PREFIX=$LLVM_PREFIX" >> $GITHUB_ENV
-          echo "$LLVM_PREFIX/bin" >> $GITHUB_PATH
-
-      - name: Install LLVM (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ver = "${{ env.LLVM_WIN_VERSION }}"
-          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/LLVM-$ver-win64.exe"
-          $out = "$env:TEMP\llvm-$ver.exe"
-          Write-Host "Downloading LLVM $ver..."
-          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
-          $proc = Start-Process -FilePath $out -ArgumentList "/S" -PassThru -Wait
-          if ($proc.ExitCode -ne 0) { Write-Error "Installer failed (code $($proc.ExitCode))"; exit 1 }
-          if (-not (Test-Path "C:\Program Files\LLVM\bin\clang.exe")) { Write-Error "LLVM not found"; exit 1 }
-          echo "LLVM_SYS_211_PREFIX=C:\Program Files\LLVM" >> $env:GITHUB_ENV
-          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: ${{ env.LLVM_VERSION }}
+          env: true
 
       # ── 빌드 ──────────────────────────────────────────────────────────────────
       - name: Build release binary

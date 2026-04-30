@@ -1,0 +1,5 @@
+@main(main) {
+    int x = 42;
+    print(undeclared_var);
+    print(x);
+}

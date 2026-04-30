@@ -80,7 +80,8 @@ impl Analyzer {
             Expr::StringLit(_) => Some(Ty::String),
             Expr::Bool(_) => Some(Ty::Bool),
 
-            Expr::Ident(name) => {
+            Expr::Ident(name, span) => {
+                self.current_span = *span;
                 self.used_vars.insert(name.clone());
                 if let Some(info) = scope.get(name) {
                     Some(info.ty.clone())
@@ -215,7 +216,8 @@ impl Analyzer {
                 }
             }
 
-            Expr::Call { name, args } => {
+            Expr::Call { name, args, span } => {
+                self.current_span = *span;
                 // len() 빌트인
                 if name == "len" {
                     if args.len() != 1 {
@@ -309,7 +311,7 @@ impl Analyzer {
 
             Expr::MethodCall { base, method, args } => {
                 // mod.func() 호출 처리
-                if let Expr::Ident(base_name) = base.as_ref() {
+                if let Expr::Ident(base_name, _) = base.as_ref() {
                     if self.module_names.contains(base_name.as_str()) {
                         let qualified = format!("{}_{}", base_name, method);
                         if let Some(sig) = self.functions.get(&qualified).cloned() {

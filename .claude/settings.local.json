@@ -15,7 +15,8 @@
       "Bash(dumpbin /symbols examples/src/anchor_restart.o)",
       "Bash(llvm-nm examples/src/anchor_restart.o)",
       "Bash(nm examples/src/anchor_restart.o)",
-      "PowerShell(& \"examples\\\\src\\\\anchor_restart.exe\" 2>&1; Write-Host \"Exit: $LASTEXITCODE\")"
+      "PowerShell(& \"examples\\\\src\\\\anchor_restart.exe\" 2>&1; Write-Host \"Exit: $LASTEXITCODE\")",
+      "Bash(rtk find *)"
     ]
   }
 }

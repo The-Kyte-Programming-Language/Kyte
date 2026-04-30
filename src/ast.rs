@@ -113,6 +113,7 @@ pub enum AnchorKind {
 pub struct Span {
     pub line: usize,
     pub col: usize,
+    pub len: usize,
 }
 
 // 타입
@@ -145,7 +146,7 @@ pub enum Expr {
     FloatLit(f64),
     StringLit(String),
     Bool(bool),
-    Ident(String),
+    Ident(String, Span),
     UnaryOp {
         op: UnaryOpKind,
         expr: Box<Expr>,
@@ -158,6 +159,7 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Expr>,
+        span: Span,
     },
     // [1, 2, 3]
     ArrayLit(Vec<Expr>),

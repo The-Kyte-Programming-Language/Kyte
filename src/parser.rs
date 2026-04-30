@@ -21,6 +21,7 @@ pub struct Parser {
     tokens: Vec<Token>,
     lines: Vec<usize>,
     cols: Vec<usize>,
+    lens: Vec<usize>,
     pos: usize,
     pub errors: Vec<String>,
     depth: usize,
@@ -29,19 +30,22 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new(spanned_tokens: Vec<(Token, usize, usize)>) -> Self {
+    pub fn new(spanned_tokens: Vec<(Token, usize, usize, usize)>) -> Self {
         let mut tokens = Vec::with_capacity(spanned_tokens.len());
         let mut lines = Vec::with_capacity(spanned_tokens.len());
         let mut cols = Vec::with_capacity(spanned_tokens.len());
-        for (tok, line, col) in spanned_tokens {
+        let mut lens = Vec::with_capacity(spanned_tokens.len());
+        for (tok, line, col, len) in spanned_tokens {
             tokens.push(tok);
             lines.push(line);
             cols.push(col);
+            lens.push(len);
         }
         Parser {
             tokens,
             lines,
             cols,
+            lens,
             pos: 0,
             errors: Vec::new(),
             depth: 0,

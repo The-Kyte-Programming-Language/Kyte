@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::parser::Parser;
 
 impl Parser {
-    pub(super) fn parse_ident_stmt(&mut self, name: String) -> Stmt {
+    pub(super) fn parse_ident_stmt(&mut self, name: String, span: Span) -> Stmt {
         // 구조체/enum 타입 변수 선언: User u = User { ... }; or Color c = Color.Red;
         if let Token::Ident(var_name) = self.current().clone() {
             let ty = if self.enum_names.contains(&name) {
@@ -50,9 +50,9 @@ impl Parser {
                 }
             }
             self.expect(&Token::RParen);
-            Expr::Call { name, args }
+            Expr::Call { name, args, span }
         } else {
-            Expr::Ident(name)
+            Expr::Ident(name, span)
         };
         let expr = self.parse_postfix_expr(base);
 
@@ -69,7 +69,7 @@ impl Parser {
             self.advance();
             let value = self.parse_expr();
             self.expect(&Token::Semicolon);
-            if let Expr::Ident(var_name) = expr {
+            if let Expr::Ident(var_name, _) = expr {
                 return Stmt::CompoundAssign {
                     name: var_name,
                     op,
@@ -89,12 +89,12 @@ impl Parser {
             let value = self.parse_expr();
             self.expect(&Token::Semicolon);
             return match expr {
-                Expr::Ident(var_name) => Stmt::Assign {
+                Expr::Ident(var_name, _) => Stmt::Assign {
                     name: var_name,
                     value,
                 },
                 Expr::Index { array, index } => match *array {
-                    Expr::Ident(var_name) => Stmt::IndexAssign {
+                    Expr::Ident(var_name, _) => Stmt::IndexAssign {
                         name: var_name,
                         index: *index,
                         value,
@@ -109,7 +109,7 @@ impl Parser {
                     }
                 },
                 Expr::FieldAccess { base, field } => match *base {
-                    Expr::Ident(var_name) => Stmt::FieldAssign {
+                    Expr::Ident(var_name, _) => Stmt::FieldAssign {
                         name: var_name,
                         field,
                         value,
@@ -342,8 +342,9 @@ impl Parser {
                 Stmt::ConstDecl { ty, name, value }
             }
             Token::Ident(name) => {
+                let span = self.current_span();
                 self.advance();
-                self.parse_ident_stmt(name)
+                self.parse_ident_stmt(name, span)
             }
             t => {
                 self.errors.push(format!(

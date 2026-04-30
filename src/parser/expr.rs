@@ -165,6 +165,7 @@ impl Parser {
                 Expr::Bool(false)
             }
             Token::Ident(s) => {
+                let span = self.current_span();
                 self.advance();
                 if !self.no_struct_init && self.current() == &Token::LBrace {
                     self.advance();
@@ -192,9 +193,9 @@ impl Parser {
                         }
                     }
                     self.expect(&Token::RParen);
-                    Expr::Call { name: s, args }
+                    Expr::Call { name: s, args, span }
                 } else {
-                    Expr::Ident(s)
+                    Expr::Ident(s, span)
                 }
             }
             // 배열 리터럴: [1, 2, 3]
@@ -299,7 +300,7 @@ impl Parser {
                     self.advance();
                     let member = self.eat_ident();
                     // Check if base is an enum name → EnumVariant
-                    if let Expr::Ident(ref base_name) = expr {
+                    if let Expr::Ident(ref base_name, _) = expr {
                         if self.enum_names.contains(base_name) {
                             // EnumName.Variant or EnumName.Variant(value)
                             let value = if self.current() == &Token::LParen {

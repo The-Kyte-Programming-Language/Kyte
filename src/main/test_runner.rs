@@ -279,7 +279,7 @@ fn eval_expr_env(
         Expr::FloatLit(f) => Ok(ActualValue::Float(*f)),
         Expr::Bool(b) => Ok(ActualValue::Bool(*b)),
         Expr::StringLit(s) => Ok(ActualValue::Str(s.clone())),
-        Expr::Ident(name) => env
+        Expr::Ident(name, _) => env
             .get(name)
             .cloned()
             .ok_or_else(|| format!("undefined variable '{}' in test evaluation", name)),
@@ -304,7 +304,7 @@ fn eval_expr_env(
             let r = eval_expr_env(right, hint_ty, env, fns)?;
             eval_binop(&l, op, &r)
         }
-        Expr::Call { name, args } => {
+        Expr::Call { name, args, .. } => {
             if let Some(fi) = fns.get(name) {
                 if fi.params.len() != args.len() {
                     return Err(format!(

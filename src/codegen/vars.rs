@@ -127,7 +127,7 @@ impl<'ctx> Codegen<'ctx> {
             Expr::FloatLit(_) => Ty::Float,
             Expr::StringLit(_) => Ty::String,
             Expr::Bool(_) => Ty::Bool,
-            Expr::Ident(name) => self.guess_var_ty(name, params),
+            Expr::Ident(name, _) => self.guess_var_ty(name, params),
             Expr::UnaryOp { op, expr } => match op {
                 UnaryOpKind::Not => Ty::Bool,
                 UnaryOpKind::Neg => self.guess_expr_ty(expr, params),

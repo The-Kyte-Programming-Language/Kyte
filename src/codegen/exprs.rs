@@ -14,7 +14,7 @@ impl<'ctx> Codegen<'ctx> {
                 .bool_type()
                 .const_int(if *b { 1 } else { 0 }, false)
                 .into(),
-            Expr::Ident(name) => {
+            Expr::Ident(name, _) => {
                 let ty = self.guess_var_ty(name, params);
                 self.load_var(name, &ty)
             }
@@ -57,10 +57,10 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 self.compile_binop(op, l, r, &ty)
             }
-            Expr::Call { name, args } => {
+            Expr::Call { name, args, .. } => {
                 // len() 빌트인
                 if name == "len" {
-                    if let Expr::Ident(arg_name) = &args[0] {
+                    if let Expr::Ident(arg_name, _) = &args[0] {
                         let len = self
                             .array_lengths
                             .get(arg_name.as_str())
@@ -121,7 +121,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             Expr::MethodCall { base, method, args } => {
                 // mod.func() 호출: base가 모듈 이름인 경우
-                if let Expr::Ident(base_name) = base.as_ref() {
+                if let Expr::Ident(base_name, _) = base.as_ref() {
                     if self.module_names.contains(base_name.as_str()) {
                         let qualified = format!("{}_{}", base_name, method);
                         if let Some(&func) = self.functions.get(&qualified) {
@@ -190,7 +190,7 @@ impl<'ctx> Codegen<'ctx> {
                     _ => Ty::Int,
                 };
                 // 런타임 배열 범위 검사 (C04)
-                let arr_name = if let Expr::Ident(n) = array.as_ref() {
+                let arr_name = if let Expr::Ident(n, _) = array.as_ref() {
                     Some(n.as_str())
                 } else {
                     None

@@ -77,7 +77,10 @@ impl fmt::Display for CompileError {
         )?;
         let trimmed = self.source_line.trim_end();
         if !trimmed.is_empty() {
-            let leading = trimmed.len() - trimmed.trim_start().len();
+            // span.col 은 렉서가 기록한 토큰 시작 열(0-indexed).
+            // 소스 줄은 그대로 표시하고, 밑줄은 정확히 토큰 위치에만 그림.
+            let underline_start = self.span.col;
+            let underline_len = self.span.len.max(1);
             writeln!(f, "      {DIM}\u{2502}{RESET}")?;
             writeln!(
                 f,
@@ -87,8 +90,8 @@ impl fmt::Display for CompileError {
             writeln!(
                 f,
                 "      {DIM}\u{2502}{RESET} {}{color}{}{RESET}",
-                " ".repeat(leading),
-                "\u{2500}".repeat(trimmed.trim_start().len())
+                " ".repeat(underline_start),
+                "\u{2500}".repeat(underline_len)
             )?;
         }
         writeln!(

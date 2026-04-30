@@ -322,7 +322,7 @@ impl Lexer {
         }
     }
 
-    pub fn tokenize(&mut self) -> Vec<(Token, usize, usize)> {
+    pub fn tokenize(&mut self) -> Vec<(Token, usize, usize, usize)> {
         let mut tokens = Vec::new();
         loop {
             self.skip_whitespace_and_comments();
@@ -331,7 +331,7 @@ impl Lexer {
 
             match self.current() {
                 None => {
-                    tokens.push((Token::EOF, start_line, start_col));
+                    tokens.push((Token::EOF, start_line, start_col, 0));
                     break;
                 }
                 Some(ch) => {
@@ -519,7 +519,8 @@ impl Lexer {
                             continue;
                         }
                     };
-                    tokens.push((tok, start_line, start_col));
+                    let len = self.col.saturating_sub(start_col).max(1);
+                    tokens.push((tok, start_line, start_col, len));
                 }
             }
         }

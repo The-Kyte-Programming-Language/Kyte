@@ -75,10 +75,15 @@ impl Parser {
         self.lines.get(self.pos).copied().unwrap_or(0)
     }
 
+    pub(super) fn current_len(&self) -> usize {
+        self.lens.get(self.pos).copied().unwrap_or(1)
+    }
+
     pub(super) fn current_span(&self) -> Span {
         Span {
             line: self.current_line(),
             col: self.current_col(),
+            len: self.current_len(),
         }
     }
 

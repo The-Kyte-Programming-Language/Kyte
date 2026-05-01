@@ -185,15 +185,6 @@ impl Parser {
                 self.expect(&Token::Semicolon);
                 Stmt::Break
             }
-            // free
-            Token::Free => {
-                self.advance();
-                self.expect(&Token::LParen);
-                let name = self.eat_ident();
-                self.expect(&Token::RParen);
-                self.expect(&Token::Semicolon);
-                Stmt::Free(name)
-            }
             // print(expr, ...)
             Token::Print => {
                 self.advance();

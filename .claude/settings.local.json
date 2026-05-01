@@ -16,7 +16,14 @@
       "Bash(llvm-nm examples/src/anchor_restart.o)",
       "Bash(nm examples/src/anchor_restart.o)",
       "PowerShell(& \"examples\\\\src\\\\anchor_restart.exe\" 2>&1; Write-Host \"Exit: $LASTEXITCODE\")",
-      "Bash(rtk find *)"
+      "Bash(rtk find *)",
+      "Bash(Get-ChildItem -Recurse -Depth 2)",
+      "Bash(Select-Object FullName)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\yeokyoomin\\\\Desktop\\\\kyte\" | Select-Object Name, @{Name='Type';Expression={if\\($_.PSIsContainer\\){'DIR'}else{'FILE'}}})",
+      "Bash(xargs wc *)",
+      "Bash(rtk du *)",
+      "Bash(grep -E \"\\\\.\\(md|txt|rs\\)$\")",
+      "Bash(grep -E \"Makefile|README|makefile|\\\\.md$\")"
     ]
   }
 }

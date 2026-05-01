@@ -32,23 +32,45 @@ Under the hood, Kyte calls `malloc` and checks for `NULL`. If allocation fails, 
 
 ---
 
-## Freeing Heap Memory
+## Automatic Memory Reclamation
 
-Heap memory is **not** automatically freed. Call `free()` when you're done:
+Vault variables are **automatically freed by the compiler** — you never call `free()` manually. The compiler performs last-use liveness analysis at compile time to determine exactly where each Vault variable is last read, then inserts the free immediately after that point.
+
+```kyte
+@main(main) {
+    Vault int x = 42;
+    print(x);         // last use of x
+    // compiler inserts free(x) here automatically
+    int y = 100;
+    print(y);
+}
+```
+
+This means:
+- **No memory leaks** from forgetting to free.
+- **No use-after-free** from freeing too early.
+- **No double-free** — the compiler tracks each variable's free point exactly once.
+
+### Branching
+
+When the last use of a Vault variable is inside an `if/else`, the compiler frees it at the end of **both** branches so both execution paths clean up:
 
 ```kyte
 Vault int x = 42;
-print(x);
-free(x);    // release the memory
+if cond {
+    print(x);
+    // compiler frees x here
+} else {
+    print(x);
+    // compiler frees x here too
+}
 ```
 
-```kyte
-Vault int[] arr = [10, 20, 30];
-print(arr[0]);
-free(arr);
-```
+If there's no `else`, or the last use is inside a loop, `while`, `for`, or `match`, the compiler frees after the entire block — always safe, always correct.
 
-Forgetting to call `free` is a memory leak. Calling `free` twice is undefined behavior. Be careful.
+### Early Exits
+
+`Kill`, `break`, and `return` trigger immediate cleanup of any Vault variables still in scope via a safety-net cleanup pass. No leaks on early exit.
 
 ---
 
@@ -64,7 +86,7 @@ Most of the time, stack allocation is exactly what you want. Use `Vault` when:
 
 ```kyte
 @main(main) {
-    Vault int attempt = 0;   // survives Kill
+    Vault int attempt = 0;   // heap-allocated, survives Kill
     attempt += 1;
 
     if attempt < 5 {
@@ -72,7 +94,7 @@ Most of the time, stack allocation is exactly what you want. Use `Vault` when:
     }
 
     print("done");
-    free(attempt);
+    // compiler frees attempt here automatically
 }
 ```
 
@@ -85,7 +107,7 @@ Stack variables (`int attempt = 0`) reset on every restart. `Vault int attempt =
 | | Stack | Vault |
 |---|---|---|
 | Allocation | automatic | `Vault` keyword |
-| Deallocation | automatic | `free()` |
+| Deallocation | automatic | automatic (compiler-inserted) |
 | Speed | fastest | malloc overhead |
 | Survives `Kill` | no | yes |
 | Use for | everything else | persistence, large data |
@@ -96,4 +118,4 @@ Stack variables (`int attempt = 0`) reset on every restart. `Vault int attempt =
 
 - Start with stack. Add `Vault` only when you have a reason.
 - In anchors with retry logic, use `Vault` for the counter and stack for everything else.
-- The compiler will warn you if a `Vault` variable might be leaking (in future versions).
+- Variables prefixed with `_` suppress unused-variable warnings; all others are checked.

@@ -20,7 +20,6 @@ pub enum Token {
     Break,    // break
     True,     // true
     False,    // false
-    Free,     // free
     Print,    // print
     While,    // while
     As,       // as
@@ -305,8 +304,6 @@ pub enum Stmt {
     },
     // break;
     Break,
-    // free(x);
-    Free(String),
     // print(expr, ...);
     Print(Vec<Expr>),
     // assert(cond);  assert(cond, "message");

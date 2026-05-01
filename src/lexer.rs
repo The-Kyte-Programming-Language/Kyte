@@ -293,7 +293,6 @@ impl Lexer {
             "break" => Token::Break,
             "true" => Token::True,
             "false" => Token::False,
-            "free" => Token::Free,
             "print" => Token::Print,
             "as" => Token::As,
             "struct" => Token::Struct,

@@ -3,6 +3,8 @@ use kyte::analyzer::AnalyzerConfig;
 use std::env;
 use std::io::Write;
 
+#[path = "main/cache.rs"]
+mod cache;
 #[path = "main/compile.rs"]
 mod compile;
 #[path = "main/imports.rs"]
@@ -11,7 +13,7 @@ mod imports;
 mod test_runner;
 
 use compile::compile_source;
-use imports::load_source_with_imports;
+use imports::{count_source_files, load_source_parallel, load_source_with_imports};
 use test_runner::run_tests;
 
 const C_RED: &str = "\x1b[31m";
@@ -50,11 +52,13 @@ fn print_banner() {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // 플래그 파싱 (A03, A05)
+    // ── Flag parsing ─────────────────────────────────────────────────────────
     let release = args.iter().any(|a| a == "--release");
     let wall = args.iter().any(|a| a == "--Wall");
     let werror = args.iter().any(|a| a == "--Werror");
     let no_unused = args.iter().any(|a| a == "--no-unused");
+    // --no-cache disables incremental compilation; incremental is on by default.
+    let incremental = !args.iter().any(|a| a == "--no-cache");
 
     let analyzer_config = AnalyzerConfig {
         wall,
@@ -68,7 +72,7 @@ fn main() {
     };
     let debug_mode = !release;
 
-    // 서브커맨드 추출 (플래그가 아닌 첫 번째 인자)
+    // ── Subcommand dispatch ───────────────────────────────────────────────────
     let subcommand = args.iter().skip(1).find(|a| !a.starts_with("--"));
 
     match subcommand.map(|s| s.as_str()) {
@@ -85,11 +89,37 @@ fn main() {
         }
         Some(path) => {
             print_banner();
-            let source = load_source_with_imports(path).unwrap_or_else(|e| {
+
+            // Count source files for the build header.
+            let file_count = count_source_files(path);
+            if file_count > 1 {
+                println!(
+                    "  {} source file{} (parallel I/O)",
+                    file_count,
+                    if file_count == 1 { "" } else { "s" }
+                );
+            }
+
+            // Use parallel loader when there are multiple files; sequential
+            // otherwise (avoids thread-spawn overhead on single-file builds).
+            let source = if file_count > 1 {
+                load_source_parallel(path)
+            } else {
+                load_source_with_imports(path)
+            }
+            .unwrap_or_else(|e| {
                 eprintln!("  Error loading {}: {}", path, e);
                 safe_exit(1);
             });
-            compile_source(&source, path, opt_level, debug_mode, &analyzer_config);
+
+            compile_source(
+                &source,
+                path,
+                opt_level,
+                debug_mode,
+                &analyzer_config,
+                incremental,
+            );
             safe_exit(0);
         }
         None => {
@@ -104,6 +134,7 @@ fn main() {
             println!("    --Wall           Enable all warnings");
             println!("    --Werror         Treat warnings as errors");
             println!("    --no-unused      Suppress unused variable warnings");
+            println!("    --no-cache       Disable incremental build cache");
             println!();
         }
     }

@@ -284,10 +284,6 @@ impl Parser {
                 self.advance();
                 "false".to_string()
             }
-            Token::Free => {
-                self.advance();
-                "free".to_string()
-            }
             Token::Print => {
                 self.advance();
                 "print".to_string()

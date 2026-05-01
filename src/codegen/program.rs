@@ -471,7 +471,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
 
                 let main_exp_vaults = self.save_vault_count("main");
-
+                self.anchor_name_stack.push("main".to_string());
                 self.compile_stmts(body, &[]);
 
                 // ── child anchors (non-thread) ────────────────────────────────
@@ -520,6 +520,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.emit_recovery_vault_assert(main_loop, main_exp_vaults, "main");
 
                 // Pop supervisor stacks after recovery block is fully emitted.
+                self.anchor_name_stack.pop();
                 self.recovery_stack.pop();
                 self.anchor_restart_bb_stack.pop();
                 self.kill_cleanup_depth_stack.pop();
@@ -674,6 +675,7 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         let child_exp_vaults = self.save_vault_count(child_name);
+        self.anchor_name_stack.push(child_name.to_string());
         self.compile_stmts(child_body, params);
 
         for (gc, _) in grandchildren {
@@ -718,6 +720,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(child_recover);
         self.emit_recovery_vault_assert(child_loop, child_exp_vaults, child_name);
 
+        self.anchor_name_stack.pop();
         self.recovery_stack.pop();
         self.anchor_restart_bb_stack.pop();
         self.kill_cleanup_depth_stack.pop();
@@ -796,6 +799,7 @@ impl<'ctx> Codegen<'ctx> {
         let outer_catch_msg = std::mem::take(&mut self.catch_msg_slot_stack);
         let outer_break_bb = self.break_bb;
         let outer_break_depth = self.break_cleanup_depth;
+        let outer_anchor_names = std::mem::take(&mut self.anchor_name_stack);
 
         // Compile the event handler function body
         self.current_fn = Some(body_fn);
@@ -891,6 +895,7 @@ impl<'ctx> Codegen<'ctx> {
         self.catch_msg_slot_stack.push(None);
 
         let exp_vaults = self.save_vault_count(anchor_name);
+        self.anchor_name_stack.push(anchor_name.to_string());
         self.compile_stmts(body, &[]);
 
         if self.no_terminator() {
@@ -903,6 +908,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(event_recover);
         self.emit_recovery_vault_assert(event_loop, exp_vaults, anchor_name);
 
+        self.anchor_name_stack.pop();
         self.recovery_stack.pop();
         self.anchor_restart_bb_stack.pop();
         self.kill_cleanup_depth_stack.pop();
@@ -934,6 +940,7 @@ impl<'ctx> Codegen<'ctx> {
         self.catch_msg_slot_stack = outer_catch_msg;
         self.break_bb = outer_break_bb;
         self.break_cleanup_depth = outer_break_depth;
+        self.anchor_name_stack = outer_anchor_names;
 
         // In the outer function: register the handler for event_name
         if self.no_terminator() {
@@ -983,6 +990,7 @@ impl<'ctx> Codegen<'ctx> {
         let outer_catch_msg_th = std::mem::take(&mut self.catch_msg_slot_stack);
         let outer_break_bb = self.break_bb;
         let outer_break_depth = self.break_cleanup_depth;
+        let outer_anchor_names_th = std::mem::take(&mut self.anchor_name_stack);
 
         // Set up the thread body function
         self.current_fn = Some(body_fn);
@@ -1061,6 +1069,7 @@ impl<'ctx> Codegen<'ctx> {
         self.catch_msg_slot_stack.push(None);
 
         let exp_vaults = self.save_vault_count(anchor_name);
+        self.anchor_name_stack.push(anchor_name.to_string());
         self.compile_stmts(body, &[]);
 
         if self.no_terminator() {
@@ -1073,6 +1082,7 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(thread_recover);
         self.emit_recovery_vault_assert(thread_loop, exp_vaults, anchor_name);
 
+        self.anchor_name_stack.pop();
         self.recovery_stack.pop();
         self.anchor_restart_bb_stack.pop();
         self.kill_cleanup_depth_stack.pop();
@@ -1104,6 +1114,7 @@ impl<'ctx> Codegen<'ctx> {
         self.catch_msg_slot_stack = outer_catch_msg_th;
         self.break_bb = outer_break_bb;
         self.break_cleanup_depth = outer_break_depth;
+        self.anchor_name_stack = outer_anchor_names_th;
 
         // In the outer function: call kyte_spawn_thread_anchor
         if self.no_terminator() {

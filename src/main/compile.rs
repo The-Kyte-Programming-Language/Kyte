@@ -8,15 +8,42 @@ use kyte::codegen::Codegen;
 use kyte::lexer::Lexer;
 use kyte::parser::Parser;
 
+use super::cache;
+
 pub(super) fn compile_source(
     source: &str,
     label: &str,
     opt_level: OptimizationLevel,
     debug_mode: bool,
     analyzer_config: &AnalyzerConfig,
+    incremental: bool,
 ) {
     let start = std::time::Instant::now();
 
+    // ── Incremental cache check ──────────────────────────────────────────────
+    // Hash the merged source.  On a cache hit the entire compile pipeline is
+    // skipped — we just copy the previously compiled .o and report timing.
+    let source_hash = cache::hash_source(source);
+    if incremental && label.ends_with(".ky") {
+        let obj_path = cache::obj_path_for(label);
+        if cache::try_cache_hit(source_hash, &obj_path) {
+            let elapsed = start.elapsed();
+            let ms = elapsed.as_millis();
+            let time_str = if ms < 1 {
+                "< 1ms".to_string()
+            } else if ms < 1000 {
+                format!("{}ms", ms)
+            } else {
+                format!("{:.2}s", elapsed.as_secs_f64())
+            };
+            println!("  cached — done in {} (no changes detected)", time_str);
+            println!();
+            let _ = std::io::stdout().flush();
+            unsafe { crate::platform_exit(0) }
+        }
+    }
+
+    // ── Lex ─────────────────────────────────────────────────────────────────
     let mut lex = Lexer::new(source);
     let tokens = lex.tokenize();
 
@@ -26,6 +53,7 @@ pub(super) fn compile_source(
         }
     }
 
+    // ── Parse ────────────────────────────────────────────────────────────────
     let ast_result = catch_unwind(AssertUnwindSafe(|| {
         let mut par = Parser::new(tokens);
         let program = par.parse();
@@ -58,6 +86,7 @@ pub(super) fn compile_source(
         return;
     }
 
+    // ── Semantic analysis ────────────────────────────────────────────────────
     let errors = Analyzer::analyze_with_config(&ast, source, analyzer_config.clone());
     let err_count = errors
         .iter()
@@ -71,8 +100,9 @@ pub(super) fn compile_source(
         return;
     }
 
+    // ── LLVM codegen ─────────────────────────────────────────────────────────
     let context = Context::create();
-    let _ir_path = {
+    let obj_was_written = {
         let mut codegen = Codegen::new(&context);
         codegen.opt_level = opt_level;
         codegen.debug_mode = debug_mode;
@@ -99,26 +129,43 @@ pub(super) fn compile_source(
         };
         codegen.write_ir_file(&ir_path);
 
+        // Cache the IR as well (for diagnostics / future incremental IR linking).
+        if incremental {
+            cache::save_ir_to_cache(source_hash, &ir_path);
+        }
+
+        let mut obj_written = false;
         if label.ends_with(".ky") {
-            let obj_path = label.replace(".ky", ".o");
+            let obj_path = cache::obj_path_for(label);
             let obj_result = catch_unwind(AssertUnwindSafe(|| {
                 codegen.write_object_file(&obj_path);
             }));
-            if let Err(panic) = obj_result {
-                let msg = panic
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "object file generation failed".to_string());
-                eprintln!("  warning: object file write failed: {}", msg);
-                eprintln!("  (IR file was written to {})", ir_path);
+            match obj_result {
+                Ok(()) => {
+                    if incremental {
+                        cache::save_to_cache(source_hash, &obj_path);
+                        // Evict stale cache entries to prevent unbounded growth.
+                        cache::evict_stale(source_hash);
+                    }
+                    obj_written = true;
+                }
+                Err(panic) => {
+                    let msg = panic
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "object file generation failed".to_string());
+                    eprintln!("  warning: object file write failed: {}", msg);
+                    eprintln!("  (IR file was written to {})", ir_path);
+                }
             }
         }
-        // codegen drop 전에 LLVM context 해제 충돌 방지
+
         std::mem::forget(codegen);
-        ir_path
+        obj_written
     };
     std::mem::forget(context);
+    let _ = obj_was_written;
 
     let elapsed = start.elapsed();
     let ms = elapsed.as_millis();
@@ -131,6 +178,5 @@ pub(super) fn compile_source(
     println!();
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
-    // LLVM 전역 상태(atexit 핸들러) drop 전에 프로세스 종료
     unsafe { crate::platform_exit(0) }
 }

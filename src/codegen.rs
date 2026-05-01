@@ -14,6 +14,8 @@ mod checks;
 mod exprs;
 #[path = "codegen/jit.rs"]
 mod jit;
+#[path = "codegen/liveness.rs"]
+mod liveness;
 #[path = "codegen/ops.rs"]
 mod ops;
 #[path = "codegen/program.rs"]
@@ -106,6 +108,9 @@ pub struct Codegen<'ctx> {
 
     /// 등록된 모듈 이름 목록 (mod call 해석용)
     module_names: std::collections::HashSet<String>,
+
+    /// 현재 앵커 이름 스택 — Kill/restart/escalate 로그에 사용
+    anchor_name_stack: Vec<String>,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -151,6 +156,7 @@ impl<'ctx> Codegen<'ctx> {
             string_temp_stack: Vec::new(),
             closure_counter: 0,
             module_names: std::collections::HashSet::new(),
+            anchor_name_stack: Vec::new(),
         }
     }
 }

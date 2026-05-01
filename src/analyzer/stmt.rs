@@ -396,11 +396,6 @@ impl Analyzer {
                 self.check_scoped_block(body, scope, return_ty, true);
                 Self::restore_scope(scope, for_scope_log);
             }
-            Stmt::Free(name) => {
-                self.err("E033",
-                    format!("manual free({}) is not allowed", name),
-                    "Vault variables are automatically freed at scope exit — remove this free() call".to_string());
-            }
             Stmt::InlineAnchor { body, .. } => {
                 let saved = self.in_anchor;
                 self.in_anchor = true;

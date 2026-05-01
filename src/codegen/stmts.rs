@@ -7,12 +7,79 @@ use crate::ast::*;
 
 impl<'ctx> Codegen<'ctx> {
     pub(super) fn compile_stmts(&mut self, stmts: &[(Stmt, Span)], params: &[Param]) {
+        self.compile_stmts_inner(stmts, params, &[]);
+    }
+
+    pub(super) fn compile_stmts_inner(
+        &mut self,
+        stmts: &[(Stmt, Span)],
+        params: &[Param],
+        end_frees: &[String],
+    ) {
         let start_depth = self.vault_scope_stack.len();
         self.vault_scope_stack.push(Vec::new());
         self.string_temp_stack.push(Vec::new());
 
-        for (stmt, _) in stmts {
-            self.compile_stmt(stmt, params);
+        // Collect vault vars declared in this block (for liveness scheduling)
+        let local_vault_vars: Vec<String> = stmts
+            .iter()
+            .filter_map(|(s, _)| {
+                if let Stmt::VaultDecl { name, .. } = s { Some(name.clone()) } else { None }
+            })
+            .collect();
+        let schedule = super::liveness::compute_schedule(stmts, &local_vault_vars);
+
+        for (i, (stmt, _)) in stmts.iter().enumerate() {
+            // Special handling for If-with-else to inject branch frees from liveness schedule
+            if let Stmt::If { cond, then_body, else_body: Some(else_body) } = stmt {
+                let func = self.current_fn.unwrap();
+                let cond_val = self.compile_expr(cond, params).into_int_value();
+                let then_bb = self.context.append_basic_block(func, "then");
+                let else_bb = self.context.append_basic_block(func, "else");
+                let merge_bb = self.context.append_basic_block(func, "merge");
+
+                self.builder
+                    .build_conditional_branch(cond_val, then_bb, else_bb)
+                    .unwrap();
+
+                // Save freed state before the if
+                let pre_if_freed = self.freed_vault_vars.clone();
+
+                // Compile then-branch with injected end-frees from parent schedule
+                let then_extra: Vec<String> = schedule.then_vars(i).to_vec();
+                self.freed_vault_vars = pre_if_freed.clone();
+                self.builder.position_at_end(then_bb);
+                self.compile_stmts_inner(then_body, params, &then_extra);
+                if self.no_terminator() {
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                }
+                let after_then_freed = self.freed_vault_vars.clone();
+
+                // Compile else-branch with injected end-frees from parent schedule
+                let else_extra: Vec<String> = schedule.else_vars(i).to_vec();
+                self.freed_vault_vars = pre_if_freed.clone();
+                self.builder.position_at_end(else_bb);
+                self.compile_stmts_inner(else_body, params, &else_extra);
+                if self.no_terminator() {
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                }
+                let after_else_freed = self.freed_vault_vars.clone();
+
+                // Post-if freed state = intersection (vars freed in both branches)
+                self.freed_vault_vars = after_then_freed
+                    .intersection(&after_else_freed)
+                    .cloned()
+                    .collect();
+
+                self.builder.position_at_end(merge_bb);
+            } else {
+                self.compile_stmt(stmt, params);
+            }
+
+            // Emit scheduled frees for this statement index
+            for var in schedule.after_vars(i) {
+                self.free_vault_var(var);
+            }
 
             if let Stmt::VaultDecl { name, .. } = stmt {
                 self.register_vault_in_current_scope(name);
@@ -21,6 +88,13 @@ impl<'ctx> Codegen<'ctx> {
             // break/return 후 더 이상 코드 생성하지 않음
             if !self.no_terminator() {
                 break;
+            }
+        }
+
+        // Emit end_frees before scope cleanup (for branch-injected frees)
+        if self.no_terminator() {
+            for var in end_frees {
+                self.free_vault_var(var);
             }
         }
 
@@ -387,13 +461,17 @@ impl<'ctx> Codegen<'ctx> {
                     self.cleanup_to_depth(cleanup_depth);
                     self.builder.build_unconditional_branch(catch_bb).unwrap();
                 } else {
-                    // ── No catch: print message then counter + escalation ─────
-                    // (catch path suppresses printing — catch body handles it)
-                    if let Some(e) = msg {
-                        if matches!(self.guess_expr_ty(e, params), Ty::String) {
-                            self.emit_print(kill_msg_ptr.into(), Some(&Ty::String));
-                        }
-                    }
+                    // ── No catch: log Kill via structured kyte_log_kill ───────
+                    let anc_name = self
+                        .anchor_name_stack
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| "main".to_string());
+                    let anc_ptr = self.global_string_ptr(&anc_name, "kill_anc_name");
+                    let log_kill = self.module.get_function("kyte_log_kill").unwrap();
+                    self.builder
+                        .build_call(log_kill, &[anc_ptr.into(), kill_msg_ptr.into()], "")
+                        .unwrap();
 
                     if let Some(&recovery_bb) = self.recovery_stack.last() {
                         let normal_depth =
@@ -437,8 +515,32 @@ impl<'ctx> Codegen<'ctx> {
                                 .build_conditional_branch(escalate_cond, escalated_bb, normal_bb)
                                 .unwrap();
 
-                            // ── normal_bb: cleanup + restart ─────────────────
+                            // ── normal_bb: log restart, cleanup, restart ──────
                             self.builder.position_at_end(normal_bb);
+                            let log_restart =
+                                self.module.get_function("kyte_log_restart").unwrap();
+                            let rst_anc = self
+                                .anchor_name_stack
+                                .last()
+                                .cloned()
+                                .unwrap_or_else(|| "main".to_string());
+                            let rst_ptr =
+                                self.global_string_ptr(&rst_anc, "rst_anc_name");
+                            let attempt_i32 = self
+                                .builder
+                                .build_int_truncate(
+                                    next,
+                                    self.context.i32_type(),
+                                    "attempt_i32",
+                                )
+                                .unwrap();
+                            self.builder
+                                .build_call(
+                                    log_restart,
+                                    &[rst_ptr.into(), attempt_i32.into()],
+                                    "",
+                                )
+                                .unwrap();
                             self.cleanup_to_depth(normal_depth);
                             self.builder
                                 .build_unconditional_branch(recovery_bb)
@@ -456,7 +558,13 @@ impl<'ctx> Codegen<'ctx> {
                                     .unwrap_or(0);
                                 let log_esc =
                                     self.module.get_function("kyte_log_escalate").unwrap();
-                                let anc_ptr = self.global_string_ptr("anchor", "esc_anc_name");
+                                let esc_anc = self
+                                    .anchor_name_stack
+                                    .last()
+                                    .cloned()
+                                    .unwrap_or_else(|| "main".to_string());
+                                let anc_ptr =
+                                    self.global_string_ptr(&esc_anc, "esc_anc_name");
                                 self.builder
                                     .build_call(log_esc, &[anc_ptr.into()], "")
                                     .unwrap();
@@ -484,10 +592,6 @@ impl<'ctx> Codegen<'ctx> {
                         }
                     }
                 }
-            }
-
-            Stmt::Free(_name) => {
-                // 자동 메모리 관리: free()는 무시 (scope exit 시 자동 해제)
             }
 
             Stmt::Yield(e) => {
@@ -645,6 +749,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.catch_msg_slot_stack.push(catch_msg_slot);
 
                 let inline_exp_vaults = self.save_vault_count(name);
+                self.anchor_name_stack.push(name.clone());
                 self.compile_stmts(body, params);
 
                 // Normal exit → merge
@@ -657,6 +762,7 @@ impl<'ctx> Codegen<'ctx> {
                 self.emit_recovery_vault_assert(anchor_loop_bb, inline_exp_vaults, name);
 
                 // ── Pop supervisor stacks ─────────────────────────────────────
+                self.anchor_name_stack.pop();
                 self.recovery_stack.pop();
                 self.anchor_restart_bb_stack.pop();
                 self.kill_cleanup_depth_stack.pop();

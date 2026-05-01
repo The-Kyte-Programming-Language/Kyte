@@ -2,45 +2,19 @@
   "name": "Kyte",
   "scopeName": "source.kyte",
   "patterns": [
-    {
-      "include": "#comments"
-    },
-    {
-      "include": "#strings"
-    },
-    {
-      "include": "#decorators"
-    },
-    {
-      "include": "#imports"
-    },
-    {
-      "include": "#numbers"
-    },
-    {
-      "include": "#anchors"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#types"
-    },
-    {
-      "include": "#functions"
-    },
-    {
-      "include": "#variables"
-    },
-    {
-      "include": "#operators"
-    },
-    {
-      "include": "#punctuation"
-    },
-    {
-      "include": "#constants"
-    }
+    { "include": "#comments" },
+    { "include": "#fstrings" },
+    { "include": "#strings" },
+    { "include": "#anchors" },
+    { "include": "#imports" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#variables" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#constants" }
   ],
   "repository": {
     "comments": {
@@ -51,6 +25,7 @@
         }
       ]
     },
+
     "strings": {
       "patterns": [
         {
@@ -66,49 +41,91 @@
         }
       ]
     },
-    "decorators": {
+
+    "fstrings": {
       "patterns": [
         {
-          "name": "meta.annotation.kyte",
-          "begin": "#\\s*([a-zA-Z_]\\w*)\\s*\\(",
+          "name": "string.interpolated.kyte",
+          "begin": "f\"",
           "beginCaptures": {
-            "1": {
-              "name": "entity.name.function.decorator.kyte"
-            }
+            "0": { "name": "punctuation.definition.string.begin.kyte" }
           },
-          "end": "\\)",
+          "end": "\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.kyte" }
+          },
           "patterns": [
             {
-              "name": "keyword.control.decorator.kyte",
-              "match": "\\b(success|fail|skip)\\b"
+              "name": "meta.interpolation.kyte",
+              "begin": "\\{",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.kyte" }
+              },
+              "end": "\\}",
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.kyte" }
+              },
+              "patterns": [
+                { "include": "#keywords" },
+                { "include": "#types" },
+                { "include": "#functions" },
+                { "include": "#numbers" },
+                { "include": "#constants" },
+                { "include": "#operators" },
+                { "include": "#variables" }
+              ]
             },
             {
-              "name": "constant.other.error-code.kyte",
-              "match": "\\bfail_[A-Z][0-9]{3}\\b"
-            },
-            {
-              "include": "#strings"
-            },
-            {
-              "include": "#numbers"
+              "name": "constant.character.escape.kyte",
+              "match": "\\\\[nrt\\\\\"0]"
             }
           ]
-        },
-        {
-          "name": "meta.annotation.kyte",
-          "match": "#\\s*[a-zA-Z_]\\w*"
         }
       ]
     },
+
+    "anchors": {
+      "patterns": [
+        {
+          "comment": "@name(event(type)) — 이벤트 앵커",
+          "name": "meta.anchor.kyte",
+          "match": "(@[a-zA-Z_]\\w*)\\s*(\\()\\s*(event)\\s*(\\()([a-zA-Z_]\\w*)(\\))(\\))",
+          "captures": {
+            "1": { "name": "entity.name.tag.anchor.kyte" },
+            "2": { "name": "punctuation.definition.anchor.kyte" },
+            "3": { "name": "constant.language.anchor-kind.kyte" },
+            "4": { "name": "punctuation.definition.anchor.kyte" },
+            "5": { "name": "constant.language.anchor-event.kyte" },
+            "6": { "name": "punctuation.definition.anchor.kyte" },
+            "7": { "name": "punctuation.definition.anchor.kyte" }
+          }
+        },
+        {
+          "comment": "@name(main|plain|thread)",
+          "name": "meta.anchor.kyte",
+          "match": "(@[a-zA-Z_]\\w*)\\s*(\\()\\s*(main|plain|thread)(\\))",
+          "captures": {
+            "1": { "name": "entity.name.tag.anchor.kyte" },
+            "2": { "name": "punctuation.definition.anchor.kyte" },
+            "3": { "name": "constant.language.anchor-kind.kyte" },
+            "4": { "name": "punctuation.definition.anchor.kyte" }
+          }
+        },
+        {
+          "comment": "인식 못한 @형태 — 폴백",
+          "name": "entity.name.tag.anchor.kyte",
+          "match": "@[a-zA-Z_]\\w*"
+        }
+      ]
+    },
+
     "imports": {
       "patterns": [
         {
           "name": "meta.import.kyte",
           "begin": "\\bimport\\b",
           "beginCaptures": {
-            "0": {
-              "name": "keyword.other.kyte"
-            }
+            "0": { "name": "keyword.control.import.kyte" }
           },
           "end": ";",
           "patterns": [
@@ -124,6 +141,7 @@
         }
       ]
     },
+
     "numbers": {
       "patterns": [
         {
@@ -136,91 +154,113 @@
         }
       ]
     },
-    "anchors": {
-      "patterns": [
-        {
-          "name": "entity.name.tag.anchor.kyte",
-          "match": "@\\w+"
-        }
-      ]
-    },
+
     "keywords": {
       "patterns": [
         {
+          "comment": "anchor 흐름 제어 — Kill / Exit",
+          "name": "keyword.control.anchor.kyte",
+          "match": "\\b(Kill|Exit)\\b"
+        },
+        {
+          "comment": "일반 흐름 제어",
           "name": "keyword.control.kyte",
-          "match": "\\b(if|else|for|in|loop|while|break|return|yield|match)\\b"
+          "match": "\\b(if|else|for|in|loop|while|break|return|yield|match|catch)\\b"
         },
         {
-          "name": "keyword.other.kyte",
-          "match": "\\b(fn|function|struct|enum|mod|import|Vault|Kill|Exit)\\b"
+          "comment": "힙 할당 한정자",
+          "name": "storage.modifier.kyte",
+          "match": "\\bVault\\b"
         },
         {
-          "name": "invalid.deprecated.kyte",
-          "match": "\\bfree\\b"
+          "comment": "선언 키워드",
+          "name": "keyword.declaration.kyte",
+          "match": "\\b(fn|struct|enum|trait|impl|mod|const)\\b"
+        },
+        {
+          "comment": "타입 변환",
+          "name": "keyword.operator.cast.kyte",
+          "match": "\\bas\\b"
+        },
+        {
+          "comment": "내장 함수형 키워드",
+          "name": "keyword.other.builtin.kyte",
+          "match": "\\b(print|assert|emit|auto)\\b"
         }
       ]
     },
+
     "types": {
       "patterns": [
         {
-          "name": "storage.type.kyte",
+          "comment": "부호 있는 / 없는 정수 타입",
+          "name": "storage.type.numeric.kyte",
+          "match": "\\b(i8|i16|i32|i64|u8|u16|u32|u64)\\b"
+        },
+        {
+          "comment": "기본 원시 타입",
+          "name": "storage.type.primitive.kyte",
           "match": "\\b(int|float|string|bool)\\b"
         },
         {
+          "comment": "사용자 정의 타입 (PascalCase)",
           "name": "entity.name.type.kyte",
           "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
         }
       ]
     },
+
     "functions": {
       "patterns": [
         {
-          "comment": "module.method() 형태 — import된 모듈 사용",
+          "comment": "module.method() — 모듈 메서드 호출",
           "name": "meta.method-call.kyte",
           "match": "\\b([a-zA-Z_]\\w*)(\\.)(([a-zA-Z_]\\w*)\\s*(?=\\())",
           "captures": {
-            "1": {
-              "name": "variable.other.module.kyte"
-            },
-            "2": {
-              "name": "punctuation.accessor.kyte"
-            },
-            "4": {
-              "name": "entity.name.function.kyte"
-            }
+            "1": { "name": "variable.other.module.kyte" },
+            "2": { "name": "punctuation.accessor.kyte" },
+            "4": { "name": "entity.name.function.kyte" }
           }
         },
         {
-          "comment": "module.field 형태 — 함수 호출 아닌 필드 접근",
+          "comment": "module.field — 필드 접근",
           "name": "meta.member-access.kyte",
           "match": "\\b([a-zA-Z_]\\w*)(\\.)(([a-zA-Z_]\\w*))",
           "captures": {
-            "1": {
-              "name": "variable.other.module.kyte"
-            },
-            "2": {
-              "name": "punctuation.accessor.kyte"
-            },
-            "4": {
-              "name": "variable.other.member.kyte"
-            }
+            "1": { "name": "variable.other.module.kyte" },
+            "2": { "name": "punctuation.accessor.kyte" },
+            "4": { "name": "variable.other.member.kyte" }
           }
         },
         {
+          "comment": "일반 함수 호출",
           "name": "entity.name.function.kyte",
           "match": "\\b([a-zA-Z_]\\w*)\\s*(?=\\()"
         },
         {
+          "comment": "구조체 초기화 / 접근",
           "name": "entity.name.type.struct.kyte",
           "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*(?=\\{|\\.)"
         }
       ]
     },
+
     "variables": {
       "patterns": [
         {
+          "comment": "암묵적 이벤트 페이로드 변수",
+          "name": "variable.language.payload.kyte",
+          "match": "\\b_payload\\b"
+        },
+        {
+          "comment": "타입 선언 직후의 변수 이름",
           "name": "variable.other.definition.kyte",
-          "match": "(?<=\\b(?:int|float|string|bool|[A-Z][a-zA-Z0-9_]*)\\s+)([a-zA-Z_]\\w*)\\b"
+          "match": "(?<=\\b(?:int|float|string|bool|i8|i16|i32|i64|u8|u16|u32|u64|[A-Z][a-zA-Z0-9_]*)\\s+)([a-zA-Z_]\\w*)\\b"
+        },
+        {
+          "comment": "_ 접두사 변수 (미사용 억제)",
+          "name": "variable.other.unused.kyte",
+          "match": "\\b_[a-zA-Z0-9_]+\\b"
         },
         {
           "name": "variable.other.kyte",
@@ -228,6 +268,7 @@
         }
       ]
     },
+
     "operators": {
       "patterns": [
         {
@@ -236,6 +277,7 @@
         }
       ]
     },
+
     "punctuation": {
       "patterns": [
         {
@@ -244,15 +286,17 @@
         }
       ]
     },
+
     "constants": {
       "patterns": [
         {
-          "name": "constant.language.kyte",
+          "name": "constant.language.boolean.kyte",
           "match": "\\b(true|false)\\b"
         },
         {
-          "name": "keyword.other.anchor-kind.kyte",
-          "match": "\\b(main|thread|event|plain|onerror|timeout)\\b"
+          "comment": "앵커 종류 식별자 (독립 토큰으로 나타날 때)",
+          "name": "constant.language.anchor-kind.kyte",
+          "match": "\\b(main|thread|event|plain)\\b"
         }
       ]
     }

@@ -23,7 +23,12 @@
       "Bash(xargs wc *)",
       "Bash(rtk du *)",
       "Bash(grep -E \"\\\\.\\(md|txt|rs\\)$\")",
-      "Bash(grep -E \"Makefile|README|makefile|\\\\.md$\")"
+      "Bash(grep -E \"Makefile|README|makefile|\\\\.md$\")",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('editors/vscode/package.json','utf8'\\)\\); console.log\\('package.json OK'\\)\")",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('editors/vscode/syntaxes/kyte.tmLanguage.json','utf8'\\)\\); console.log\\('grammar OK'\\)\")",
+      "Bash(node -e \"require\\('./editors/vscode/extension.js'\\); console.log\\('extension.js parse OK'\\)\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\yeokyoomin\\\\Desktop\\\\kyte\\\\src\" -Directory)",
+      "Bash(Select-Object Name)"
     ]
   }
 }

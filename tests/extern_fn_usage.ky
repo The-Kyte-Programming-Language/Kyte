@@ -1,0 +1,6 @@
+extern fn add_c(int a, int b) -> int;
+
+fn main() -> int {
+    int result = add_c(3, 5);
+    return result;
+}

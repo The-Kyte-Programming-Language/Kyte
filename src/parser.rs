@@ -98,6 +98,7 @@ impl Parser {
                     self.expect(&Token::Semicolon);
                     items.push((TopLevel::ConstDecl { ty, name, value }, span));
                 }
+                Token::Extern => items.push(self.parse_extern_fn()),
                 t => {
                     self.errors.push(format!(
                         "Unexpected top-level token: {:?} at line {}:{}",

@@ -1,0 +1,7 @@
+extern fn malloc(u64 size) -> u64;
+extern fn free(u64 ptr);
+extern fn memcpy(u64 dest, u64 src, u64 size) -> u64;
+
+@main(main) {
+    int x = 42;
+}

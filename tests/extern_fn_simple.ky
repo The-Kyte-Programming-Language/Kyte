@@ -1,0 +1,1 @@
+extern fn add_c(int a, int b) -> int;

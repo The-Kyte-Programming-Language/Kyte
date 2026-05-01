@@ -183,6 +183,27 @@ impl Analyzer {
                     a.functions.insert(name.clone(), sig);
                 }
             }
+            if let TopLevel::ExternFn {
+                name,
+                params,
+                return_ty,
+            } = item
+            {
+                let sig = FnSig {
+                    params: params.iter().map(|p| p.ty.clone()).collect(),
+                    return_ty: return_ty.clone(),
+                };
+                if a.functions.contains_key(name) {
+                    a.current_span = *item_span;
+                    a.err(
+                        "E001",
+                        format!("Duplicate function '{}'", name),
+                        format!("Remove or rename one of the '{}' definitions", name),
+                    );
+                } else {
+                    a.functions.insert(name.clone(), sig);
+                }
+            }
             // Impl 블록의 메서드를 TraitName_TypeName_method 형식으로 등록
             if let TopLevel::Impl {
                 trait_name,

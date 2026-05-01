@@ -121,4 +121,31 @@ impl Parser {
 
         (TopLevel::Enum { name, variants }, span)
     }
+
+    // extern fn 선언 파싱
+    pub(super) fn parse_extern_fn(&mut self) -> (TopLevel, Span) {
+        let span = self.current_span();
+        self.expect(&Token::Extern);
+        self.expect(&Token::Function);
+        let name = self.eat_ident();
+        self.expect(&Token::LParen);
+        let mut params = Vec::new();
+        while self.current() != &Token::RParen && self.current() != &Token::EOF {
+            let ty = self.parse_ty();
+            let pname = self.eat_var_ident();
+            params.push(Param { ty, name: pname });
+            if self.current() == &Token::Comma {
+                self.advance();
+            }
+        }
+        self.expect(&Token::RParen);
+        let return_ty = if self.current() == &Token::Arrow {
+            self.advance();
+            Some(self.parse_ty())
+        } else {
+            None
+        };
+        self.expect(&Token::Semicolon);
+        (TopLevel::ExternFn { name, params, return_ty }, span)
+    }
 }

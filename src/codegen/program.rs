@@ -151,6 +151,27 @@ impl<'ctx> Codegen<'ctx> {
                 self.functions.insert(name.clone(), func);
                 self.fn_return_tys.insert(name.clone(), return_ty.clone());
             }
+            if let TopLevel::ExternFn {
+                name,
+                params,
+                return_ty,
+            } = item
+            {
+                let param_types: Vec<BasicMetadataTypeEnum> =
+                    params.iter().map(|p| self.ty_to_llvm(&p.ty)).collect();
+
+                let fn_type = match return_ty {
+                    Some(ty) => {
+                        let ret_ty = self.ty_to_basic(ty);
+                        ret_ty.fn_type(&param_types, false)
+                    }
+                    None => self.context.void_type().fn_type(&param_types, false),
+                };
+
+                let func = self.module.add_function(name, fn_type, None);
+                self.functions.insert(name.clone(), func);
+                self.fn_return_tys.insert(name.clone(), return_ty.clone());
+            }
             if let TopLevel::Impl {
                 trait_name,
                 target_ty,

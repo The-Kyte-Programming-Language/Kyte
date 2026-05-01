@@ -16,7 +16,7 @@ if score >= 90 {
 }
 ```
 
-Conditions don't need parentheses. Braces are required.
+No parentheses around the condition. Braces are always required, even for one-liners.
 
 ---
 
@@ -24,39 +24,52 @@ Conditions don't need parentheses. Braces are required.
 
 ```kyte
 for i in 0..5 {
-    print(i);   // 0 1 2 3 4
+    print(i);
+}
+// 0 1 2 3 4
+```
+
+`0..5` is exclusive on the right (same as Rust). Iterate over an array:
+
+```kyte
+int[] nums = [10, 20, 30, 40, 50];
+for i in 0..len(nums) {
+    print(nums[i]);
 }
 ```
 
-The range `0..5` is exclusive on the right side (like Rust).
-
-Loop backwards? Use a while loop for now:
+Need to go backwards? Use a while loop:
 
 ```kyte
-int i = 5;
-while i > 0 {
+int i = 4;
+while i >= 0 {
+    print(i);
     i -= 1;
-    print(i);   // 4 3 2 1 0
 }
+// 4 3 2 1 0
 ```
 
 ---
 
 ## while
 
+Repeats as long as the condition holds:
+
 ```kyte
 int n = 1;
-while n < 100 {
+while n < 1000 {
     n *= 2;
 }
-print(n);   // 128
+print(n);  // 1024
 ```
+
+Parentheses around the condition are optional — omitting them is cleaner.
 
 ---
 
 ## loop
 
-An infinite loop. Use `break` or `return` to exit:
+Infinite loop. You decide when to exit:
 
 ```kyte
 int count = 0;
@@ -64,41 +77,92 @@ loop {
     count += 1;
     if count >= 5 { break; }
 }
-print(count);   // 5
+print(count);  // 5
 ```
+
+Clearer than `while true` — explicitly signals "the exit condition lives inside the body."
 
 ---
 
 ## break
 
-Exits the innermost loop:
+Exits the innermost loop immediately:
 
 ```kyte
 for i in 0..100 {
     if i == 7 { break; }
     print(i);
 }
+// 0 1 2 3 4 5 6
 ```
+
+In nested loops, `break` only exits the **innermost** one. To break out of multiple levels, use a flag variable or extract the loops into a function.
+
+---
+
+## continue
+
+Skips the rest of the current iteration and moves on to the next one:
+
+```kyte
+// Print only even numbers
+for i in 0..10 {
+    if i % 2 != 0 { continue; }
+    print(i);
+}
+// 0 2 4 6 8
+```
+
+```kyte
+// Sum only positive values
+int[] vals = [3, -1, 7, -2, 5];
+int sum = 0;
+for i in 0..len(vals) {
+    if vals[i] < 0 { continue; }
+    sum = sum + vals[i];
+}
+print(sum);  // 15
+```
+
+`break` **ends** the loop. `continue` **skips** the current iteration.
 
 ---
 
 ## match
 
-Pattern matching. Clean alternative to long if/else chains.
+Pattern matching — the clean alternative to long `if/else if` chains.
 
 ### Match on integers
 
 ```kyte
-int x = 2;
-match x {
-    1 => { print("one"); }
-    2 => { print("two"); }
-    3 => { print("three"); }
-    _ => { print("other"); }   // wildcard — catches everything else
+int code = 404;
+
+match code {
+    200 => { print("OK"); }
+    404 => { print("Not Found"); }
+    500 => { print("Server Error"); }
+    _   => { print(f"Unknown: {code}"); }
+}
+```
+
+`_` is the wildcard — it catches everything not matched above. It must come last.
+
+### Match on strings
+
+```kyte
+string cmd = "quit";
+
+match cmd {
+    "start" => { print("Starting!"); }
+    "stop"  => { print("Stopping!"); }
+    "quit"  => { print("Bye!"); }
+    _       => { print("Unknown command"); }
 }
 ```
 
 ### Match on enums
+
+This is where match really shines:
 
 ```kyte
 enum Direction { North, South, East, West }
@@ -123,50 +187,37 @@ enum Result {
 Result r = Result.Ok(42);
 
 match r {
-    Result.Ok(n) => { print(n); }   // prints 42
-    Result.Err   => { print("error"); }
+    Result.Ok(n) => { print(f"Success: {n}"); }
+    Result.Err   => { print("Failed"); }
 }
 ```
 
-The `_` wildcard must come last. Every match arm body is a block `{ }`.
+`n` is a pattern binding — the payload is extracted and bound to that name. You can name it anything.
 
 ---
 
 ## assert
 
-Runtime assertion — panics if the condition is false:
+Validates invariants. Panics immediately if the condition is false:
 
 ```kyte
-int x = 42;
-assert(x > 0);       // fine
-assert(x == 0);      // panics at runtime
+assert(x > 0);
+assert(len(arr) > 0, "array must not be empty");
 ```
 
-Use it for invariants and debugging. Not a substitute for error handling.
-
----
-
-## yield
-
-Yields a value from an anchor (see [Anchors](anchors.md)):
-
-```kyte
-@worker(thread) {
-    int result = compute();
-    yield result;
-}
-```
+For debugging and invariant checks. Don't use it for user input validation — if it fires, the program dies. Use `if`/`Kill` for recoverable errors.
 
 ---
 
 ## Exit
 
-Terminates the program immediately:
+Terminates the program immediately. No cleanup, no unwinding:
 
 ```kyte
-if fatal_error {
+if config_missing {
+    print("No config file found.");
     Exit;
 }
 ```
 
-Think of it as `exit(0)` — no cleanup, no unwinding, just done.
+Equivalent to `exit(0)`. Reserve it for unrecoverable initialization failures.

@@ -1,10 +1,12 @@
 # Structs & Enums
 
+Two ways to build custom types. Structs **group related data**; enums **represent one of several states**.
+
 ---
 
 ## Structs
 
-A struct groups related fields together. Fields have explicit types, terminated by `;`.
+A struct bundles related fields under one type name. Every field has an explicit type ending with `;`:
 
 ```kyte
 struct Point {
@@ -21,32 +23,28 @@ struct User {
 
 ### Creating instances
 
+Field names are always required — positional initialization isn't allowed. This prevents subtle bugs when fields are reordered or new ones are added:
+
 ```kyte
-Point p = Point { x: 1.0, y: 2.5 };
-User u = User { name: "Alice", age: 30, active: true };
+Point origin = Point { x: 0.0, y: 0.0 };
+User alice   = User { name: "Alice", age: 30, active: true };
 ```
 
-### Accessing fields
+### Accessing and mutating fields
 
 ```kyte
-print(p.x);        // 1.0
-print(u.name);     // Alice
-```
+print(alice.name);    // Alice
+print(alice.age);     // 30
 
-### Mutating fields
-
-```kyte
-u.age = 31;
-p.x += 0.5;
+alice.age = 31;
+origin.x += 1.0;
 ```
 
 ---
 
 ## Enums
 
-Enums define a type with a fixed set of variants. Variants can optionally carry a value.
-
-### Simple enum
+Enums define a type with a fixed set of variants. Use them instead of magic booleans or magic integers — the name makes intent clear and the compiler enforces exhaustive handling.
 
 ```kyte
 enum Direction {
@@ -58,78 +56,87 @@ enum Direction {
 ```
 
 ```kyte
-Direction d = Direction.North;
+Direction heading = Direction.North;
 ```
 
-### Enum with payload
+Why enum instead of `bool`? `bool is_north` can only mean two things and doesn't scale when you add `Northeast`. `Direction` names all the cases, and the compiler tells you when you've missed one in a `match`.
 
-Variants can carry a single value:
+### Variants with payloads
+
+A variant can carry a single value:
 
 ```kyte
-enum Option {
-    Some(int),
-    None,
-}
-
 enum Shape {
-    Circle(float),    // radius
-    Square(float),    // side length
-    Rectangle(float), // width (simplified)
+    Circle(float),   // radius
+    Rect(float),     // area (simplified)
+}
+
+enum Event {
+    Click(int),   // element ID
+    Resize,
+    Quit,
 }
 ```
 
 ```kyte
-Option val = Option.Some(42);
 Shape s = Shape.Circle(3.14);
+Event e = Event.Click(42);
 ```
 
-### Using enums in match
-
-This is where enums shine:
+Extract the payload with `match`:
 
 ```kyte
-Option result = Option.Some(99);
-
-match result {
-    Option.Some(n) => { print(n); }
-    Option.None    => { print("nothing"); }
+match s {
+    Shape.Circle(r) => { print(f"circle, radius {r}"); }
+    Shape.Rect(a)   => { print(f"rect, area {a}"); }
 }
 ```
 
-For payload variants, the inner value is bound to the identifier you name in the pattern — `n` in this case.
+`r` is a pattern binding — you can name it anything you like.
 
 ---
 
 ## Putting it Together
 
+The most common pattern: an enum field inside a struct, unpacked with `match`:
+
 ```kyte
-enum Color {
-    Red,
-    Green,
-    Blue,
+enum Status {
+    Active,
+    Banned(string),   // reason
+    Pending,
 }
 
-struct Pixel {
-    int x;
-    int y;
-    Color color;
+struct User {
+    string name;
+    int age;
+    Status status;
 }
 
 @main(main) {
-    Pixel px = Pixel { x: 10, y: 20, color: Color.Red };
+    User bob = User {
+        name: "Bob",
+        age: 25,
+        status: Status.Banned("spam"),
+    };
 
-    match px.color {
-        Color.Red   => { print("red pixel"); }
-        Color.Green => { print("green pixel"); }
-        Color.Blue  => { print("blue pixel"); }
+    match bob.status {
+        Status.Active      => { print(f"{bob.name}: active"); }
+        Status.Banned(why) => { print(f"{bob.name}: banned — {why}"); }
+        Status.Pending     => { print(f"{bob.name}: pending"); }
     }
 }
+```
+
+Output:
+```
+Bob: banned — spam
 ```
 
 ---
 
 ## Tips
 
-- Struct field order matters at initialization — always use field names (`{ x: 1.0, y: 2.5 }`).
-- Enums don't have methods by themselves — combine with `impl` for that (see [Traits & Impl](traits-impl.md)).
-- Enum variants with payloads can only carry one value. Use a struct if you need multiple fields.
+- Payload variants carry **one** value. If you need multiple fields, put them in a struct.
+- Struct fields have no defaults — every field must be set at initialization.
+- To attach methods to enums or structs, use `impl` + `trait` (see [Traits & Impl](traits-impl.md)).

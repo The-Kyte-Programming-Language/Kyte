@@ -1,0 +1,14 @@
+const int MAX = 100;
+const float PI = 3.14;
+const bool FLAG = true;
+const string MSG = "constant";
+
+@main(main) {
+    print(MAX);
+    print(PI);
+    print(FLAG);
+    print(MSG);
+
+    int x = MAX + 1;
+    print(x);
+}

@@ -1,0 +1,16 @@
+@main(main) {
+    int count = 0;
+    for i in 0..3 {
+        for j in 0..3 {
+            count = count + 1;
+        }
+    }
+    print(count);
+
+    int mat_sum = 0;
+    int[] row = [1, 2, 3];
+    for k in 0..3 {
+        mat_sum = mat_sum + row[k] * (k + 1);
+    }
+    print(mat_sum);
+}

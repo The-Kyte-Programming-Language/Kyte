@@ -119,11 +119,12 @@ impl<'ctx> Codegen<'ctx> {
                         it.const_int(*n as u64, *n < 0).into()
                     }
                     Expr::FloatLit(f) => self.f64_type().const_float(*f).into(),
-                    Expr::StringLit(s) => self.global_string_ptr(s, name).into(),
+                    Expr::StringLit(s) => self.global_string_const(s, name).into(),
                     Expr::Bool(b) => self.bool_type().const_int(*b as u64, false).into(),
                     _ => llvm_ty.const_zero(),
                 };
                 global.set_initializer(&init_val);
+                self.var_types.insert(name.clone(), ty.clone());
             }
         }
 

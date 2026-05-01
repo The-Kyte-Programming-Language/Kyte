@@ -1,6 +1,6 @@
 # Functions
 
-Functions are declared with `fn`. Parameters are typed, return types are optional (void if omitted).
+Functions are declared with `fn`. Parameters are `type name` pairs; return type follows `->`. Omit `->` for void.
 
 ---
 
@@ -16,42 +16,41 @@ fn greet(string name) {
 }
 ```
 
-Call them like you'd expect:
-
 ```kyte
 @main(main) {
-    int result = add(3, 4);   // 7
-    greet("Kyte");             // Hello, Kyte!
+    int result = add(3, 4);  // 7
+    greet("Kyte");            // Hello, Kyte!
 }
 ```
 
 ---
 
-## Multiple Parameters
+## Why `type name` Order?
 
-Parameters are separated by commas, each with `type name`:
+Kyte puts the type first: `int a`, `string name`. This matches variable declarations and struct fields, so the pattern is always the same:
 
 ```kyte
-fn clamp(int val, int lo, int hi) -> int {
-    if val < lo { return lo; }
-    if val > hi { return hi; }
-    return val;
-}
+int x = 42;                    // variable
+struct Point { int x; }        // field
+fn move(int dx, int dy) { }    // parameter
 ```
 
 ---
 
-## Void Functions
+## Early Return
 
-Omit the `->` return type for functions that don't return a value:
+Use `return` to exit at any point. Great for guard clauses — reject bad input upfront and keep the happy path clean:
 
 ```kyte
-fn log(string msg) {
-    print(msg);
+fn find(int[] arr, int target) -> int {
+    for i in 0..len(arr) {
+        if arr[i] == target { return i; }
+    }
+    return -1;
 }
 ```
 
-You can still use `return;` to exit early:
+Void functions can use bare `return;` to exit early:
 
 ```kyte
 fn process(int x) {
@@ -64,46 +63,54 @@ fn process(int x) {
 
 ## Closures
 
-Closures are anonymous functions assigned to variables. They use `|params: types|` syntax:
+Closures are anonymous functions assigned to a variable. Use them for one-off transformations or callbacks:
 
 ```kyte
 auto double = |n: int| { return n * 2; };
-auto add = |a: int, b: int| { return a + b; };
+auto clamp  = |v: int, lo: int, hi: int| {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    return v;
+};
 
-int d = double(21);   // 42
-int s = add(10, 5);   // 15
+print(double(21));           // 42
+print(clamp(150, 0, 100));   // 100
 ```
 
-Closures are capture-free function pointers — they can't close over local variables (yet). Think of them as lightweight named lambdas.
+Parameters use `|name: type, ...|` syntax. Closures are capture-free function pointers — they don't close over local variables. Think of them as lightweight lambdas you can pass around.
 
 ---
 
 ## Generics
 
-Functions can be generic over types using `<T>`:
+Write a function once and have it work across types with `<T>`:
 
 ```kyte
 fn identity<T>(T val) -> T {
     return val;
 }
 
-fn max<T>(T a, T b) -> T {
+fn max_of<T>(T a, T b) -> T {
     if a > b { return a; }
     return b;
 }
+```
 
+```kyte
 @main(main) {
-    int x = identity(42);
+    int x  = identity(42);
     float y = identity(3.14);
-    int m = max(10, 20);   // 20
+    int m  = max_of(10, 20);   // 20
 }
 ```
 
+Why bother? Without generics you'd write `max_int`, `max_float`, `max_string` separately. With `<T>`, one function covers all comparable types. The compiler monomorphizes it at each call site — zero runtime overhead.
+
 ---
 
-## Method-style Functions
+## Method-Style Functions
 
-Functions can be defined with a type prefix to act like methods:
+Attach a function to a struct using `fn TypeName.method()` syntax:
 
 ```kyte
 struct Vec2 {
@@ -115,25 +122,38 @@ fn Vec2.length(Vec2 self) -> float {
     return (self.x * self.x + self.y * self.y) as float;
 }
 
-@main(main) {
-    Vec2 v = Vec2 { x: 3.0, y: 4.0 };
-    float len = Vec2.length(v);
-    print(len);
+fn Vec2.scale(Vec2 self, float factor) -> Vec2 {
+    return Vec2 { x: self.x * factor, y: self.y * factor };
 }
 ```
 
----
-
-## Early Return
-
-Use `return` to exit a function at any point:
+Call it by passing the instance explicitly:
 
 ```kyte
-fn find(int[] arr, int target) -> int {
-    for i in 0..10 {
-        if arr[i] == target { return i; }
-    }
-    return -1;
+@main(main) {
+    Vec2 v = Vec2 { x: 3.0, y: 4.0 };
+    float len = Vec2.length(v);
+    print(len);   // 25.0 (sum of squares)
+}
+```
+
+> For a more structured approach — enforced contracts across types — see [Traits & Impl](traits-impl.md).
+
+---
+
+## Recursion
+
+Recursive functions work normally:
+
+```kyte
+fn factorial(int n) -> int {
+    if n <= 1 { return 1; }
+    return n * factorial(n - 1);
+}
+
+fn fib(int n) -> int {
+    if n <= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
 }
 ```
 
@@ -141,6 +161,7 @@ fn find(int[] arr, int target) -> int {
 
 ## Tips
 
-- Parameters are always pass-by-value for primitives.
-- Return type annotation is required when the function returns something.
-- Recursive functions work just fine.
+- Primitive parameters (`int`, `float`, `bool`) are passed by value.
+- `string` and structs are passed as pointers internally.
+- If you declare a return type, the compiler checks that every code path returns a value.
+- Functions are top-level only — no nested functions. Use closures instead.

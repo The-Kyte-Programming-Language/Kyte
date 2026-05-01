@@ -1,0 +1,9 @@
+// Type mismatch in return
+#test(fail)
+fn return_type_error() -> int {
+    return "hello";
+}
+
+@main(main) {
+    print("type error tests");
+}

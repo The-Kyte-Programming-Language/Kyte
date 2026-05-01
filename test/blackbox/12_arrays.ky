@@ -1,0 +1,22 @@
+@main(main) {
+    int[] arr = [1, 2, 3, 4, 5];
+    print(arr[0]);
+    print(arr[4]);
+    print(len(arr));
+
+    arr[2] = 99;
+    print(arr[2]);
+
+    int sum = 0;
+    for i in 0..5 {
+        sum = sum + arr[i];
+    }
+    print(sum);
+
+    float[] fv = [1.1, 2.2, 3.3];
+    print(fv[1]);
+
+    bool[] flags = [true, false, true];
+    print(flags[0]);
+    print(flags[1]);
+}

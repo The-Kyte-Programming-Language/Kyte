@@ -1,0 +1,84 @@
+enum Direction {
+    North,
+    South,
+    East,
+    West
+}
+
+enum Result {
+    Ok(int),
+    Err(int)
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+// Enums can't be value-tested in AST interpreter — use #test(success)
+#test(success)
+fn enum_basic() {
+    Direction d = Direction.North;
+    match d {
+        Direction.North => { print("north"); }
+        Direction.South => { print("south"); }
+        Direction.East => { print("east"); }
+        Direction.West => { print("west"); }
+        _ => { print("unknown"); }
+    }
+}
+
+#test(success)
+fn enum_match_all_arms() {
+    Color c = Color.Green;
+    match c {
+        Color.Red => { print("red"); }
+        Color.Green => { print("green"); }
+        Color.Blue => { print("blue"); }
+        _ => { print("other"); }
+    }
+}
+
+#test(success)
+fn enum_with_payload() {
+    Result r = Result.Ok(42);
+    match r {
+        Result.Ok(val) => { print(val); }
+        Result.Err(code) => { print(code); }
+        _ => { print("other"); }
+    }
+}
+
+fn classify(int n) -> Direction {
+    if n > 0 {
+        return Direction.North;
+    }
+    return Direction.South;
+}
+
+#test(success)
+fn enum_from_fn() {
+    Direction d = classify(5);
+    match d {
+        Direction.North => { print("positive"); }
+        Direction.South => { print("negative"); }
+        _ => { print("other"); }
+    }
+}
+
+#test(success)
+fn enum_south() {
+    Direction d = Direction.South;
+    match d {
+        Direction.North => { print("n"); }
+        Direction.South => { print("s"); }
+        Direction.East => { print("e"); }
+        Direction.West => { print("w"); }
+        _ => {}
+    }
+}
+
+@main(main) {
+    print("enum tests");
+}

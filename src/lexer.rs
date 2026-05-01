@@ -291,6 +291,7 @@ impl Lexer {
             "for" => Token::For,
             "in" => Token::In,
             "break" => Token::Break,
+            "continue" => Token::Continue,
             "true" => Token::True,
             "false" => Token::False,
             "print" => Token::Print,

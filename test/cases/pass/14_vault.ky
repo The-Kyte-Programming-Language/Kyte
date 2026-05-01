@@ -1,0 +1,48 @@
+// Vault can't be value-tested in AST interpreter — use #test(success)
+#test(success)
+fn vault_basic() {
+    Vault int x = 42;
+    print(x);
+}
+
+#test(success)
+fn vault_assign() {
+    Vault int n = 10;
+    n = 20;
+    print(n);
+}
+
+#test(success)
+fn vault_array() {
+    Vault int[] arr = [1, 2, 3, 4, 5];
+    print(arr[0]);
+}
+
+#test(success)
+fn vault_multiple() {
+    Vault int a = 1;
+    Vault int b = 2;
+    Vault int c = a + b;
+    print(c);
+}
+
+#test(success)
+fn vault_loop_free() {
+    Vault int a = 10;
+    Vault int b = 20;
+    int sum = 0;
+    sum = a + b;
+    print(sum);
+}
+
+#test(success)
+fn vault_int_arith() {
+    Vault int x = 10;
+    Vault int y = 20;
+    int z = x + y;
+    print(z);
+}
+
+@main(main) {
+    print("vault tests");
+}

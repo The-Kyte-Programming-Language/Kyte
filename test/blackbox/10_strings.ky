@@ -1,0 +1,15 @@
+fn greet(string name) -> string {
+    return "hello";
+}
+
+@main(main) {
+    string s = "hello";
+    print(s);
+    string t = "world";
+    print(t);
+    print(s == "hello");
+    print(s == "world");
+    print(s != t);
+    string g = greet("kyte");
+    print(g);
+}

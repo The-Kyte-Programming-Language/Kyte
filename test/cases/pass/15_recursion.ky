@@ -1,0 +1,68 @@
+fn factorial(int n) -> int {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+#test(success, 1)
+fn fact_0() -> int { return factorial(0); }
+
+#test(success, 1)
+fn fact_1() -> int { return factorial(1); }
+
+#test(success, 6)
+fn fact_3() -> int { return factorial(3); }
+
+#test(success, 120)
+fn fact_5() -> int { return factorial(5); }
+
+fn fib(int n) -> int {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+#test(success, 0)
+fn fib_0() -> int { return fib(0); }
+
+#test(success, 1)
+fn fib_1() -> int { return fib(1); }
+
+#test(success, 1)
+fn fib_2() -> int { return fib(2); }
+
+#test(success, 8)
+fn fib_6() -> int { return fib(6); }
+
+#test(success, 55)
+fn fib_10() -> int { return fib(10); }
+
+fn gcd(int a, int b) -> int {
+    if b == 0 {
+        return a;
+    }
+    return gcd(b, a % b);
+}
+
+#test(success, 6)
+fn gcd_12_18() -> int { return gcd(12, 18); }
+
+#test(success, 1)
+fn gcd_7_13() -> int { return gcd(7, 13); }
+
+fn power(int base, int exp) -> int {
+    if exp == 0 { return 1; }
+    return base * power(base, exp - 1);
+}
+
+#test(success, 8)
+fn pow_2_3() -> int { return power(2, 3); }
+
+#test(success, 32)
+fn pow_2_5() -> int { return power(2, 5); }
+
+@main(main) {
+    print("recursion tests");
+}

@@ -1,0 +1,55 @@
+mod math {
+    fn abs(int n) -> int {
+        if n < 0 {
+            return -n;
+        }
+        return n;
+    }
+
+    fn clamp(int val, int lo, int hi) -> int {
+        // Use (condition) parens to prevent "lo {" and "hi {" being parsed as struct init
+        if (val < lo) { return lo; }
+        if (val > hi) { return hi; }
+        return val;
+    }
+
+    fn square(int n) -> int {
+        return n * n;
+    }
+}
+
+mod strings_util {
+    fn repeat_count(string s, int n) -> int {
+        return n;
+    }
+}
+
+// Module calls parse as MethodCall, not value-testable by AST eval
+// Use #test(success) for all module function call tests
+#test(success)
+fn mod_abs_pos() -> int { return math.abs(5); }
+
+#test(success)
+fn mod_abs_neg() -> int { return math.abs(-5); }
+
+#test(success)
+fn mod_abs_zero() -> int { return math.abs(0); }
+
+#test(success)
+fn mod_clamp_low() -> int { return math.clamp(2, 5, 10); }
+
+#test(success)
+fn mod_clamp_high() -> int { return math.clamp(15, 5, 10); }
+
+#test(success)
+fn mod_clamp_mid() -> int { return math.clamp(7, 5, 10); }
+
+#test(success)
+fn mod_square() -> int { return math.square(5); }
+
+#test(success)
+fn mod_strings_util() -> int { return strings_util.repeat_count("hi", 3); }
+
+@main(main) {
+    print("module tests");
+}

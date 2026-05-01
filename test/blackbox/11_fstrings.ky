@@ -1,0 +1,18 @@
+@main(main) {
+    int x = 42;
+    string s = f"x is {x}";
+    print(s);
+
+    float f = 3.14;
+    string fs = f"pi = {f}";
+    print(fs);
+
+    bool b = true;
+    string bs = f"flag = {b}";
+    print(bs);
+
+    int a = 10;
+    int c = 20;
+    string combined = f"sum of {a} and {c} is {a + c}";
+    print(combined);
+}

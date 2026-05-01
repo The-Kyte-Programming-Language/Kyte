@@ -1,0 +1,10 @@
+@main(main) {
+    float a = 3.5;
+    float b = 1.5;
+    print(a + b);
+    print(a - b);
+    print(a * b);
+    print(5.0 / 2.0);
+    float c = 3.14;
+    print(c);
+}

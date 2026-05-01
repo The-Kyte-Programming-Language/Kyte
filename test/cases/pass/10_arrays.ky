@@ -1,0 +1,62 @@
+// Arrays can't be value-tested in AST interpreter, use #test(success)
+#test(success)
+fn array_literal() {
+    int[] arr = [1, 2, 3, 4, 5];
+    print(arr[0]);
+}
+
+#test(success)
+fn array_index() {
+    int[] nums = [10, 20, 30];
+    int x = nums[1];
+    print(x);
+}
+
+#test(success)
+fn array_len_builtin() {
+    int[] arr = [1, 2, 3];
+    int n = len(arr);
+    print(n);
+}
+
+#test(success)
+fn array_loop() {
+    int[] nums = [1, 2, 3, 4, 5];
+    int sum = 0;
+    for i in 0..5 {
+        sum = sum + nums[i];
+    }
+    print(sum);
+}
+
+#test(success)
+fn array_assign() {
+    int[] arr = [0, 0, 0];
+    arr[1] = 42;
+    print(arr[1]);
+}
+
+#test(success)
+fn float_array() {
+    float[] vals = [1.1, 2.2, 3.3];
+    print(vals[0]);
+}
+
+#test(success)
+fn bool_array() {
+    bool[] flags = [true, false, true];
+    print(flags[0]);
+}
+
+#test(success)
+fn array_first_last() {
+    int[] data = [10, 20, 30, 40, 50];
+    int first = data[0];
+    int last = data[4];
+    print(first);
+    print(last);
+}
+
+@main(main) {
+    print("array tests");
+}

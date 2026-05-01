@@ -298,8 +298,12 @@ impl<'ctx> Codegen<'ctx> {
 
                 let saved_break = self.break_bb;
                 let saved_break_depth = self.break_cleanup_depth;
+                let saved_continue = self.continue_bb;
+                let saved_continue_depth = self.continue_cleanup_depth;
                 self.break_bb = Some(after_bb);
                 self.break_cleanup_depth = Some(self.vault_scope_stack.len());
+                self.continue_bb = Some(loop_bb);
+                self.continue_cleanup_depth = Some(self.vault_scope_stack.len());
 
                 self.builder.build_unconditional_branch(loop_bb).unwrap();
                 self.builder.position_at_end(loop_bb);
@@ -310,6 +314,8 @@ impl<'ctx> Codegen<'ctx> {
 
                 self.break_bb = saved_break;
                 self.break_cleanup_depth = saved_break_depth;
+                self.continue_bb = saved_continue;
+                self.continue_cleanup_depth = saved_continue_depth;
                 self.builder.position_at_end(after_bb);
             }
 
@@ -321,8 +327,12 @@ impl<'ctx> Codegen<'ctx> {
 
                 let saved_break = self.break_bb;
                 let saved_break_depth = self.break_cleanup_depth;
+                let saved_continue = self.continue_bb;
+                let saved_continue_depth = self.continue_cleanup_depth;
                 self.break_bb = Some(after_bb);
                 self.break_cleanup_depth = Some(self.vault_scope_stack.len());
+                self.continue_bb = Some(cond_bb);
+                self.continue_cleanup_depth = Some(self.vault_scope_stack.len());
 
                 self.builder.build_unconditional_branch(cond_bb).unwrap();
 
@@ -342,6 +352,8 @@ impl<'ctx> Codegen<'ctx> {
 
                 self.break_bb = saved_break;
                 self.break_cleanup_depth = saved_break_depth;
+                self.continue_bb = saved_continue;
+                self.continue_cleanup_depth = saved_continue_depth;
                 self.builder.position_at_end(after_bb);
             }
 
@@ -352,8 +364,8 @@ impl<'ctx> Codegen<'ctx> {
                 body,
             } => {
                 let func = self.current_fn.unwrap();
-                let _preheader_bb = self.builder.get_insert_block().unwrap();
                 let loop_bb = self.context.append_basic_block(func, "for_body");
+                let inc_bb = self.context.append_basic_block(func, "for_inc");
                 let after_bb = self.context.append_basic_block(func, "for_after");
 
                 // 초기값
@@ -362,8 +374,12 @@ impl<'ctx> Codegen<'ctx> {
 
                 let saved_break = self.break_bb;
                 let saved_break_depth = self.break_cleanup_depth;
+                let saved_continue = self.continue_bb;
+                let saved_continue_depth = self.continue_cleanup_depth;
                 self.break_bb = Some(after_bb);
                 self.break_cleanup_depth = Some(self.vault_scope_stack.len());
+                self.continue_bb = Some(inc_bb);
+                self.continue_cleanup_depth = Some(self.vault_scope_stack.len());
 
                 // alloca for loop var
                 let alloca = self.build_alloca(var, &Ty::Int);
@@ -383,31 +399,34 @@ impl<'ctx> Codegen<'ctx> {
                 // body
                 self.builder.position_at_end(loop_bb);
                 self.compile_stmts(body, params);
-
                 if self.no_terminator() {
-                    // increment
-                    let cur = self
-                        .builder
-                        .build_load(self.i64_type(), alloca, var)
-                        .unwrap()
-                        .into_int_value();
-                    let next = self
-                        .builder
-                        .build_int_add(cur, self.i64_type().const_int(1, false), "next")
-                        .unwrap();
-                    self.builder.build_store(alloca, next).unwrap();
-
-                    let loop_cond = self
-                        .builder
-                        .build_int_compare(IntPredicate::SLT, next, end_val, "for_cond")
-                        .unwrap();
-                    self.builder
-                        .build_conditional_branch(loop_cond, loop_bb, after_bb)
-                        .unwrap();
+                    self.builder.build_unconditional_branch(inc_bb).unwrap();
                 }
+
+                // increment block (continue target)
+                self.builder.position_at_end(inc_bb);
+                let cur = self
+                    .builder
+                    .build_load(self.i64_type(), alloca, var)
+                    .unwrap()
+                    .into_int_value();
+                let next = self
+                    .builder
+                    .build_int_add(cur, self.i64_type().const_int(1, false), "next")
+                    .unwrap();
+                self.builder.build_store(alloca, next).unwrap();
+                let loop_cond = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, next, end_val, "for_cond")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(loop_cond, loop_bb, after_bb)
+                    .unwrap();
 
                 self.break_bb = saved_break;
                 self.break_cleanup_depth = saved_break_depth;
+                self.continue_bb = saved_continue;
+                self.continue_cleanup_depth = saved_continue_depth;
                 self.builder.position_at_end(after_bb);
             }
 
@@ -416,6 +435,15 @@ impl<'ctx> Codegen<'ctx> {
                     self.cleanup_to_depth(depth);
                 }
                 if let Some(bb) = self.break_bb {
+                    self.builder.build_unconditional_branch(bb).unwrap();
+                }
+            }
+
+            Stmt::Continue => {
+                if let Some(depth) = self.continue_cleanup_depth {
+                    self.cleanup_to_depth(depth);
+                }
+                if let Some(bb) = self.continue_bb {
                     self.builder.build_unconditional_branch(bb).unwrap();
                 }
             }

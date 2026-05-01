@@ -1,0 +1,84 @@
+#test(success, 7)
+fn int_add() -> int { return 3 + 4; }
+
+#test(success, -1)
+fn int_sub() -> int { return 3 - 4; }
+
+#test(success, 12)
+fn int_mul() -> int { return 3 * 4; }
+
+#test(success, 2)
+fn int_div() -> int { return 7 / 3; }
+
+#test(success, 1)
+fn int_mod() -> int { return 7 % 3; }
+
+#test(success, -5)
+fn int_neg() -> int { return -5; }
+
+#test(success, 1)
+fn int_unary_neg() -> int { return -(3 - 4); }
+
+#test(success, 7.5)
+fn float_add() -> float { return 3.5 + 4.0; }
+
+#test(success, 2.5)
+fn float_div() -> float { return 5.0 / 2.0; }
+
+#test(success, true)
+fn int_compare_lt() -> bool { return 3 < 5; }
+
+#test(success, false)
+fn int_compare_gt() -> bool { return 3 > 5; }
+
+#test(success, true)
+fn int_compare_le() -> bool { return 5 <= 5; }
+
+#test(success, true)
+fn int_compare_ge() -> bool { return 5 >= 4; }
+
+#test(success, true)
+fn int_compare_eq() -> bool { return 5 == 5; }
+
+#test(success, true)
+fn int_compare_neq() -> bool { return 5 != 3; }
+
+// Cast int to float — use non-integer float to avoid float-display-as-int issue
+// 5.0 in decorator gets stored as "5" (Rust Display), parsed as Int(5) != Float(5.0)
+// Instead test with a value that has a fractional part via expression
+#test(success, true)
+fn cast_int_to_float() -> bool {
+    float f = 5 as float;
+    return f == 5.0;
+}
+
+// Cast float to int (truncation)
+#test(success, 3)
+fn cast_float_to_int() -> int { return 3.9 as int; }
+
+// Cast bool to int
+#test(success, 1)
+fn cast_bool_to_int() -> int { return true as int; }
+
+// Cast int to bool
+#test(success, true)
+fn cast_int_to_bool() -> bool { return 42 as bool; }
+
+#test(success, false)
+fn cast_zero_to_bool() -> bool { return 0 as bool; }
+
+// Chained arithmetic
+#test(success, 14)
+fn chained_arith() -> int { return 2 + 3 * 4; }
+
+// Parenthesized expression
+#test(success, 20)
+fn paren_arith() -> int { return (2 + 3) * 4; }
+
+// Modulo zero check
+#test(success, 0)
+fn mod_edge() -> int { return 10 % 5; }
+
+@main(main) {
+    print("arithmetic tests");
+}

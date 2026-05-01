@@ -44,7 +44,7 @@ pub(super) fn stmt_uses(stmt: &Stmt, name: &str) -> bool {
         Stmt::FieldAssign { value, .. } => expr_uses(value, name),
         Stmt::Print(args) => args.iter().any(|a| expr_uses(a, name)),
         Stmt::Return(Some(e)) => expr_uses(e, name),
-        Stmt::Return(None) | Stmt::Break | Stmt::Exit => false,
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Exit => false,
         Stmt::Kill(Some(e)) => expr_uses(e, name),
         Stmt::Kill(None) => false,
         Stmt::Yield(e) => expr_uses(e, name),

@@ -1,0 +1,65 @@
+struct Circle {
+    float radius;
+}
+
+struct Rectangle {
+    float width;
+    float height;
+}
+
+trait Shape {
+    fn area(float r) -> float;
+}
+
+// impl TraitName TypeName { ... } — "for" keyword is Token::For not Ident("for"),
+// so use impl TraitName TypeName without the "for" keyword
+impl Shape Circle {
+    fn area(float r) -> float {
+        return 3.14159 * r * r;
+    }
+}
+
+impl Shape Rectangle {
+    fn area(float w) -> float {
+        return w * w;
+    }
+}
+
+// Trait method calls register as TraitName_TypeName_methodname
+// These are parse+analyze tested only (method calls can't eval in test runner)
+#test(success)
+fn trait_circle_area() {
+    float a = Shape_Circle_area(5.0);
+    print(a);
+}
+
+#test(success)
+fn trait_rect_area() {
+    float a = Shape_Rectangle_area(4.0);
+    print(a);
+}
+
+// Multiple trait impls on same struct
+struct Counter {
+    int value;
+}
+
+trait Increment {
+    fn inc(int n) -> int;
+}
+
+impl Increment Counter {
+    fn inc(int n) -> int {
+        return n + 1;
+    }
+}
+
+#test(success)
+fn trait_counter_inc() {
+    int result = Increment_Counter_inc(5);
+    print(result);
+}
+
+@main(main) {
+    print("trait tests");
+}

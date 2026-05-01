@@ -185,6 +185,12 @@ impl Parser {
                 self.expect(&Token::Semicolon);
                 Stmt::Break
             }
+            // continue
+            Token::Continue => {
+                self.advance();
+                self.expect(&Token::Semicolon);
+                Stmt::Continue
+            }
             // print(expr, ...)
             Token::Print => {
                 self.advance();
@@ -218,7 +224,10 @@ impl Parser {
             // if
             Token::If => {
                 self.advance();
+                let prev = self.no_struct_init;
+                self.no_struct_init = true;
                 let cond = self.parse_expr();
+                self.no_struct_init = prev;
                 self.expect(&Token::LBrace);
                 let then_body = self.parse_body();
                 self.expect(&Token::RBrace);

@@ -1,0 +1,28 @@
+@main(main) {
+    int result = 0;
+    for i in 0..10 {
+        if i == 5 {
+            break;
+        }
+        result = result + i;
+    }
+    print(result);
+
+    int evens = 0;
+    for i in 0..10 {
+        if i % 2 != 0 {
+            continue;
+        }
+        evens = evens + i;
+    }
+    print(evens);
+
+    int j = 0;
+    while (j < 10) {
+        j = j + 1;
+        if j == 3 {
+            break;
+        }
+    }
+    print(j);
+}

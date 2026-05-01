@@ -1,0 +1,59 @@
+struct Point {
+    int x;
+    int y;
+}
+
+struct Person {
+    string name;
+    int age;
+}
+
+// Structs can't be value-tested in AST interpreter — use #test(success)
+#test(success)
+fn struct_create() {
+    Point p = Point { x: 10, y: 20 };
+    print(p.x);
+    print(p.y);
+}
+
+#test(success)
+fn struct_field_access() {
+    Point p = Point { x: 5, y: 3 };
+    int sum = p.x + p.y;
+    print(sum);
+}
+
+#test(success)
+fn struct_field_assign() {
+    Point p = Point { x: 1, y: 2 };
+    p.x = 100;
+    print(p.x);
+}
+
+fn make_point(int x, int y) -> Point {
+    return Point { x: x, y: y };
+}
+
+#test(success)
+fn struct_from_fn() {
+    Point p = make_point(7, 8);
+    print(p.x);
+}
+
+#test(success)
+fn struct_string_field() {
+    Person alice = Person { name: "Alice", age: 30 };
+    print(alice.name);
+    print(alice.age);
+}
+
+#test(success)
+fn struct_update_field() {
+    Person bob = Person { name: "Bob", age: 25 };
+    bob.age = 26;
+    print(bob.age);
+}
+
+@main(main) {
+    print("struct tests");
+}

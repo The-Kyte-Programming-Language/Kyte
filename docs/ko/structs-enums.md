@@ -1,10 +1,12 @@
 # Struct & Enum
 
+커스텀 타입을 만드는 두 가지 방법. Struct는 **연관된 데이터를 묶을 때**, Enum은 **여러 상태 중 하나를 표현할 때**.
+
 ---
 
 ## Struct
 
-struct는 관련 필드를 묶습니다. 필드는 명시적 타입, `;`으로 끝냅니다.
+관련 필드를 하나의 타입으로 묶습니다:
 
 ```kyte
 struct Point {
@@ -19,34 +21,32 @@ struct User {
 }
 ```
 
+필드마다 타입을 명시하고 `;`으로 끝냅니다.
+
 ### 인스턴스 생성
 
 ```kyte
-Point p = Point { x: 1.0, y: 2.5 };
-User u = User { name: "앨리스", age: 30, active: true };
+Point origin = Point { x: 0.0, y: 0.0 };
+User alice = User { name: "앨리스", age: 30, active: true };
 ```
 
-### 필드 접근
+필드명을 반드시 명시해야 합니다. 순서만 맞추고 이름을 생략하는 건 안 됩니다 — 필드가 많아지면 어느 값이 어느 필드인지 헷갈리는 버그를 막기 위해서입니다.
+
+### 필드 접근 & 변경
 
 ```kyte
-print(p.x);        // 1.0
-print(u.name);     // 앨리스
-```
+print(alice.name);    // 앨리스
+print(alice.age);     // 30
 
-### 필드 변경
-
-```kyte
-u.age = 31;
-p.x += 0.5;
+alice.age = 31;
+origin.x += 1.0;
 ```
 
 ---
 
 ## Enum
 
-Enum은 고정된 변형 집합을 가진 타입을 정의합니다. 변형에는 선택적으로 값을 담을 수 있습니다.
-
-### 단순 열거형
+정해진 변형 중 하나를 갖는 타입입니다:
 
 ```kyte
 enum Direction {
@@ -58,77 +58,87 @@ enum Direction {
 ```
 
 ```kyte
-Direction d = Direction.North;
+Direction heading = Direction.North;
 ```
+
+왜 bool 대신 enum을 쓰나요? `bool is_north`보다 `Direction.North`가 더 명확합니다. 나중에 변형이 추가될 때도 (`Northeast` 등) 기존 코드를 망가뜨리지 않습니다.
 
 ### 페이로드가 있는 열거형
 
-변형에 값 하나를 담을 수 있습니다:
+변형에 값을 하나 담을 수 있습니다:
 
 ```kyte
-enum Option {
-    Some(int),
-    None,
-}
-
 enum Shape {
-    Circle(float),    // 반지름
-    Square(float),    // 변의 길이
+    Circle(float),   // 반지름
+    Rect(float),     // 넓이 (간단한 예시)
+}
+
+enum Event {
+    Click(int),      // 클릭된 요소 ID
+    Resize,          // 크기 변경 (페이로드 없음)
+    Quit,
 }
 ```
 
 ```kyte
-Option val = Option.Some(42);
 Shape s = Shape.Circle(3.14);
+Event e = Event.Click(42);
 ```
 
-### match에서 enum 사용
-
-enum이 빛나는 순간:
+페이로드를 꺼낼 때는 `match`를 씁니다:
 
 ```kyte
-Option result = Option.Some(99);
-
-match result {
-    Option.Some(n) => { print(n); }   // 99 출력
-    Option.None    => { print("없음"); }
+match s {
+    Shape.Circle(r) => { print(f"원, 반지름 {r}"); }
+    Shape.Rect(a)   => { print(f"직사각형, 넓이 {a}"); }
 }
 ```
 
-페이로드 변형에서 내부 값은 패턴의 식별자에 바인딩됩니다 — 여기서는 `n`.
+`r`은 패턴 바인딩입니다 — 이름은 자유롭게 지을 수 있습니다.
 
 ---
 
-## 조합 예제
+## Struct + Enum 조합
+
+실제로 가장 많이 쓰이는 패턴입니다:
 
 ```kyte
-enum Color {
-    Red,
-    Green,
-    Blue,
+enum Status {
+    Active,
+    Banned(string),  // 사유
+    Pending,
 }
 
-struct Pixel {
-    int x;
-    int y;
-    Color color;
+struct User {
+    string name;
+    int age;
+    Status status;
 }
 
 @main(main) {
-    Pixel px = Pixel { x: 10, y: 20, color: Color.Red };
+    User bob = User {
+        name: "밥",
+        age: 25,
+        status: Status.Banned("스팸"),
+    };
 
-    match px.color {
-        Color.Red   => { print("빨간 픽셀"); }
-        Color.Green => { print("초록 픽셀"); }
-        Color.Blue  => { print("파란 픽셀"); }
+    match bob.status {
+        Status.Active      => { print(f"{bob.name}: 활성"); }
+        Status.Banned(why) => { print(f"{bob.name}: 차단됨 — {why}"); }
+        Status.Pending     => { print(f"{bob.name}: 대기 중"); }
     }
 }
 ```
 
+출력:
+```
+밥: 차단됨 — 스팸
+```
+
 ---
 
-## 팁
+## 알아두면 좋은 점
 
-- Struct 초기화 시 필드 순서는 중요합니다 — 항상 필드명을 명시하세요 (`{ x: 1.0, y: 2.5 }`).
-- Enum 자체에는 메서드가 없습니다 — `impl`과 조합하면 됩니다 ([Trait & Impl](traits-impl.md) 참고).
-- 페이로드 변형은 값 하나만 담을 수 있습니다. 여러 필드가 필요하면 struct를 사용하세요.
+- 페이로드 변형은 값을 **하나**만 담습니다. 여러 필드가 필요하면 struct를 만들어서 담으세요.
+- Struct 필드는 **기본값이 없습니다** — 인스턴스 생성 시 모든 필드를 채워야 합니다.
+- Enum에 직접 메서드를 붙이려면 `impl` + `trait`을 사용합니다 ([Trait & Impl](traits-impl.md) 참고).

@@ -276,7 +276,7 @@ impl Analyzer {
                     );
                 }
             }
-            Stmt::Exit | Stmt::Break => {}
+            Stmt::Exit | Stmt::Break | Stmt::Continue => {}
             Stmt::Yield(e) => {
                 if !self.in_anchor {
                     self.err(

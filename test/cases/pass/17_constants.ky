@@ -1,0 +1,60 @@
+const int MAX = 100;
+const float PI = 3.14159;
+const bool DEBUG = false;
+const string APP_NAME = "kyte";
+
+// Global consts are available to the analyzer but not the test eval env
+// so we use #test(success) for functions that return a global const by name
+
+#test(success)
+fn const_int_val() -> int {
+    return MAX;
+}
+
+#test(success)
+fn const_compare() -> bool {
+    return MAX > 50;
+}
+
+#test(success)
+fn const_bool_val() -> bool {
+    return DEBUG;
+}
+
+#test(success)
+fn const_string_val() -> bool {
+    return APP_NAME == "kyte";
+}
+
+// Local const is handled by Stmt::ConstDecl which IS in eval_stmt
+#test(success, 42)
+fn local_const() -> int {
+    const int LOCAL = 42;
+    return LOCAL;
+}
+
+// Local const string
+#test(success, true)
+fn local_const_string() -> bool {
+    const string NAME = "kyte";
+    return NAME == "kyte";
+}
+
+// Local const bool
+#test(success, false)
+fn local_const_bool() -> bool {
+    const bool FLAG = false;
+    return FLAG;
+}
+
+// Local const arithmetic
+#test(success, 200)
+fn local_const_arith() -> int {
+    const int A = 100;
+    const int B = 100;
+    return A + B;
+}
+
+@main(main) {
+    print("const tests");
+}

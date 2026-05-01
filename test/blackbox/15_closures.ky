@@ -1,0 +1,9 @@
+@main(main) {
+    auto double = |x: int| { return x * 2; };
+    auto square = |x: int| { return x * x; };
+    auto add_ten = |x: int| { return x + 10; };
+
+    print(double(5));
+    print(square(4));
+    print(add_ten(7));
+}

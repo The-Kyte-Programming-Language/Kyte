@@ -5,7 +5,7 @@ impl Analyzer {
     pub(super) fn stmt_is_early_exit(stmt: &Stmt) -> bool {
         matches!(
             stmt,
-            Stmt::Return(_) | Stmt::Exit | Stmt::Break | Stmt::Kill(_) | Stmt::Yield(_)
+            Stmt::Return(_) | Stmt::Exit | Stmt::Break | Stmt::Continue | Stmt::Kill(_) | Stmt::Yield(_)
         )
     }
 

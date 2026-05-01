@@ -1,0 +1,72 @@
+#test(success, true)
+fn string_eq() -> bool {
+    string s = "hello";
+    return s == "hello";
+}
+
+#test(success, false)
+fn string_neq() -> bool {
+    string s = "hello";
+    return s == "world";
+}
+
+// String returned from function
+fn greeting() -> string {
+    return "hello";
+}
+
+#test(success, true)
+fn string_fn_call() -> bool {
+    string g = greeting();
+    return g == "hello";
+}
+
+// Multiple string variables
+#test(success, true)
+fn string_multi() -> bool {
+    string a = "foo";
+    string b = "bar";
+    string c = "foo";
+    return a == c && a != b;
+}
+
+// f-string just parse/analyze (can't value-test in AST interpreter)
+#test(success)
+fn fstring_basic() {
+    int x = 42;
+    string s = f"value is {x}";
+    print(s);
+}
+
+#test(success)
+fn fstring_float() {
+    float f = 3.14;
+    string s = f"pi = {f}";
+    print(s);
+}
+
+#test(success)
+fn fstring_bool() {
+    bool b = true;
+    string s = f"flag = {b}";
+    print(s);
+}
+
+// String literal assignment and return
+#test(success, true)
+fn string_literal_return() -> bool {
+    string x = "kyte";
+    return x == "kyte";
+}
+
+// Empty string comparison
+#test(success, true)
+fn string_empty_eq() -> bool {
+    string a = "";
+    string b = "";
+    return a == b;
+}
+
+@main(main) {
+    print("string tests");
+}

@@ -18,6 +18,7 @@ pub enum Token {
     For,      // for
     In,       // in
     Break,    // break
+    Continue, // continue
     True,     // true
     False,    // false
     Print,    // print
@@ -305,6 +306,8 @@ pub enum Stmt {
     },
     // break;
     Break,
+    // continue;
+    Continue,
     // print(expr, ...);
     Print(Vec<Expr>),
     // assert(cond);  assert(cond, "message");

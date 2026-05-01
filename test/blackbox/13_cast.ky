@@ -1,0 +1,19 @@
+@main(main) {
+    float f = 5 as float;
+    print(f == 5.0);
+
+    int n = 3 as int;
+    print(n);
+
+    int from_float = 3.9 as int;
+    print(from_float);
+
+    int from_bool = true as int;
+    print(from_bool);
+
+    bool from_int = 42 as bool;
+    print(from_int);
+
+    bool zero_bool = 0 as bool;
+    print(zero_bool);
+}

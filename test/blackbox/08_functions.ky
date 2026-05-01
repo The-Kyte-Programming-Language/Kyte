@@ -1,0 +1,30 @@
+fn add(int a, int b) -> int {
+    return a + b;
+}
+
+fn multiply(int a, int b) -> int {
+    return a * b;
+}
+
+fn max_val(int a, int b) -> int {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+fn abs_val(int n) -> int {
+    if n < 0 {
+        return -n;
+    }
+    return n;
+}
+
+@main(main) {
+    print(add(3, 4));
+    print(multiply(3, 4));
+    print(max_val(10, 20));
+    print(max_val(30, 5));
+    print(abs_val(-7));
+    print(abs_val(3));
+}

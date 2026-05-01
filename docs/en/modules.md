@@ -1,12 +1,12 @@
 # Modules
 
-Modules let you group related functions into a named namespace. Two ways to use them: inline `mod` blocks and `import` statements.
+As code grows, a single file becomes unwieldy. Kyte offers two tools to organize it: **inline `mod` blocks** and **`import`**.
 
 ---
 
-## Inline Modules
+## Inline `mod` — Namespace Grouping
 
-Define a module with `mod` and call its functions with `ModuleName.functionName()`:
+Bundle related functions under a name within one file:
 
 ```kyte
 mod math {
@@ -25,65 +25,86 @@ mod math {
 }
 
 @main(main) {
-    int sum = math.add(3, 7);     // 10
-    int sq  = math.square(5);     // 25
-    int a   = math.abs(-12);      // 12
-    print(sum);
+    print(math.add(3, 7));    // 10
+    print(math.square(5));    // 25
+    print(math.abs(-12));     // 12
 }
 ```
 
-Modules can contain any number of functions. They're purely a namespace — no state, no instances.
+Call functions as `module.function()`. The namespace prevents name collisions, and typing `math.` triggers LSP autocomplete for everything inside.
+
+`mod` holds **functions only** — no variables, no struct definitions. Those go at the top level.
 
 ---
 
-## Importing Files
+## `import` — File Splitting
 
-Split your code across multiple `.ky` files using `import`:
+When a file gets too long, split it:
 
 ```kyte
-// helpers.ky
+// utils.ky
 fn clamp(int val, int lo, int hi) -> int {
     if val < lo { return lo; }
     if val > hi { return hi; }
     return val;
 }
+
+fn sign(int n) -> int {
+    if n > 0 { return 1; }
+    if n < 0 { return -1; }
+    return 0;
+}
 ```
 
 ```kyte
 // main.ky
-import "helpers.ky";
+import "utils.ky";
 
 @main(main) {
     int x = clamp(150, 0, 100);   // 100
+    int s = sign(-42);             // -1
     print(x);
+    print(s);
 }
 ```
 
-Imports are resolved relative to the current file's directory. The imported file's top-level declarations become available directly — no prefix needed.
+All top-level declarations from the imported file — functions, structs, enums, consts — become available directly in the importing file. No prefix needed.
+
+Import paths are relative to the current file's directory.
 
 ---
 
-## Combining Both
+## Using Both Together
 
 ```kyte
 import "math_utils.ky";
 
-mod string_utils {
-    fn repeat(string s, int n) -> string {
+mod fmt {
+    fn pad_left(string s, int width) -> string {
         // ...
     }
 }
 
 @main(main) {
-    int result = math_utils_fn(5);           // from import
-    string r = string_utils.repeat("hi", 3); // from mod
+    int result = some_math_fn(5);       // from import
+    string r = fmt.pad_left("hi", 10); // from mod
 }
 ```
 
 ---
 
+## When to Use What
+
+| Situation | Use |
+|---|---|
+| Grouping functions logically within one file | `mod` block |
+| File has grown too long | `import` |
+| Reusing shared library code | `import` |
+
+---
+
 ## Tips
 
-- `mod` is for logical grouping within a file. `import` is for splitting across files.
-- Circular imports are not supported.
-- The LSP provides auto-completion for module function calls — just type `math.` and see the list.
+- Circular imports are not supported — `a.ky` importing `b.ky` which imports `a.ky` will error.
+- Importing the same file from multiple places is safe — it's processed once.
+- The LSP autocompletes `mod` members — type `math.` and see the list.

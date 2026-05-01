@@ -1,6 +1,6 @@
 # 함수
 
-함수는 `fn`으로 선언합니다. 매개변수는 타입 명시, 반환 타입은 선택 (없으면 void).
+함수는 `fn`으로 선언합니다. 매개변수는 `타입 이름` 순서, 반환 타입은 `->` 뒤에.
 
 ---
 
@@ -16,94 +16,97 @@ fn greet(string name) {
 }
 ```
 
-호출은 예상대로:
-
 ```kyte
 @main(main) {
-    int result = add(3, 4);   // 7
-    greet("Kyte");             // 안녕하세요, Kyte!
+    int result = add(3, 4);  // 7
+    greet("Kyte");            // 안녕하세요, Kyte!
 }
+```
+
+반환값이 없으면 `->`를 생략합니다. 빈 `return;`으로 함수 중간에 빠져나올 수 있습니다.
+
+---
+
+## 왜 `타입 이름` 순서인가요?
+
+Kyte의 매개변수는 타입이 먼저 옵니다: `int a`, `string name`. C/Java와 같은 스타일입니다. `a: int` 스타일 (Rust/Swift)이 아닌 이유는 struct 필드, 변수 선언과 일관성을 유지하기 위해서입니다.
+
+```kyte
+// 선언 스타일이 일관됩니다:
+int x = 42;                    // 변수
+struct Point { int x; }        // 필드
+fn move(int dx, int dy) { }    // 매개변수
 ```
 
 ---
 
-## 여러 매개변수
+## 조기 반환
 
-쉼표로 구분하고 각각 `타입 이름` 형식으로:
+중간에 `return`으로 바로 나올 수 있습니다. 중첩 조건을 피하는 가장 깔끔한 방법입니다:
 
 ```kyte
-fn clamp(int val, int lo, int hi) -> int {
-    if val < lo { return lo; }
-    if val > hi { return hi; }
-    return val;
+fn find(int[] arr, int target) -> int {
+    for i in 0..len(arr) {
+        if arr[i] == target { return i; }
+    }
+    return -1;
 }
 ```
 
----
-
-## void 함수
-
-반환값 없으면 `->` 생략:
-
-```kyte
-fn log(string msg) {
-    print(msg);
-}
-```
-
-조기 종료에 `return;` 사용 가능:
-
-```kyte
-fn process(int x) {
-    if x < 0 { return; }
-    print(x);
-}
-```
+중첩 if 안에서 행복한 경로만 쫓는 것보다 훨씬 읽기 좋습니다.
 
 ---
 
 ## 클로저
 
-클로저는 변수에 할당하는 익명 함수입니다. `|파라미터: 타입|` 문법을 씁니다:
+클로저는 변수에 할당하는 익명 함수입니다. 일회성 변환 로직, 콜백에 쓰면 좋습니다:
 
 ```kyte
 auto double = |n: int| { return n * 2; };
-auto add = |a: int, b: int| { return a + b; };
+auto clamp  = |v: int, lo: int, hi: int| {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    return v;
+};
 
-int d = double(21);   // 42
-int s = add(10, 5);   // 15
+print(double(21));       // 42
+print(clamp(150, 0, 100));  // 100
 ```
 
-클로저는 캡처 없는 함수 포인터입니다 — 로컬 변수를 가두지 않습니다. 가벼운 이름 없는 함수라고 생각하세요.
+매개변수는 `|이름: 타입, ...|` 형식입니다. 클로저는 외부 로컬 변수를 캡처하지 않습니다 — 가볍고 예측 가능한 함수 포인터라고 생각하면 됩니다.
 
 ---
 
 ## 제네릭
 
-`<T>`로 타입에 대해 제네릭한 함수 작성:
+`<T>`로 타입에 상관없이 동작하는 함수를 만듭니다:
 
 ```kyte
 fn identity<T>(T val) -> T {
     return val;
 }
 
-fn max<T>(T a, T b) -> T {
+fn max_of<T>(T a, T b) -> T {
     if a > b { return a; }
     return b;
 }
+```
 
+```kyte
 @main(main) {
-    int x = identity(42);
+    int x  = identity(42);
     float y = identity(3.14);
-    int m = max(10, 20);   // 20
+    int m  = max_of(10, 20);  // 20
 }
 ```
+
+제네릭이 왜 필요한가요? `max_int(a, b)`, `max_float(a, b)`를 따로 만드는 대신, 하나의 함수가 모든 비교 가능한 타입에 대해 동작합니다. 컴파일러가 사용 지점에서 실제 타입으로 특수화(monomorphization)합니다 — 런타임 오버헤드 없음.
 
 ---
 
 ## 메서드 스타일 함수
 
-타입 이름을 접두사로 붙여 메서드처럼 정의:
+struct에 연관 함수를 붙이려면 `fn 타입이름.메서드이름()` 문법을 씁니다:
 
 ```kyte
 struct Vec2 {
@@ -115,25 +118,38 @@ fn Vec2.length(Vec2 self) -> float {
     return (self.x * self.x + self.y * self.y) as float;
 }
 
-@main(main) {
-    Vec2 v = Vec2 { x: 3.0, y: 4.0 };
-    float len = Vec2.length(v);
-    print(len);
+fn Vec2.scale(Vec2 self, float factor) -> Vec2 {
+    return Vec2 { x: self.x * factor, y: self.y * factor };
 }
 ```
 
----
-
-## 조기 반환
-
-`return`으로 어디서든 함수 종료:
+호출할 때는 타입 이름으로 명시적으로 호출합니다:
 
 ```kyte
-fn find(int[] arr, int target) -> int {
-    for i in 0..10 {
-        if arr[i] == target { return i; }
-    }
-    return -1;
+@main(main) {
+    Vec2 v = Vec2 { x: 3.0, y: 4.0 };
+    float len = Vec2.length(v);  // v를 self로 넘김
+    print(len);                  // 25.0 (제곱합)
+}
+```
+
+> **참고:** `impl` + `trait`을 쓰면 더 체계적으로 타입에 메서드를 부여할 수 있습니다. 자세한 내용은 [Trait & Impl](traits-impl.md) 참고.
+
+---
+
+## 재귀
+
+재귀 함수도 잘 동작합니다:
+
+```kyte
+fn factorial(int n) -> int {
+    if n <= 1 { return 1; }
+    return n * factorial(n - 1);
+}
+
+fn fib(int n) -> int {
+    if n <= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
 }
 ```
 
@@ -141,6 +157,7 @@ fn find(int[] arr, int target) -> int {
 
 ## 팁
 
-- 기본 타입 매개변수는 값으로 전달됩니다.
-- 반환값이 있는 함수는 반환 타입 명시가 필수입니다.
-- 재귀 함수도 잘 동작합니다.
+- 기본 타입 매개변수(`int`, `float`, `bool`)는 값으로 전달됩니다.
+- `string`과 struct는 포인터로 전달됩니다 (내부적으로).
+- 반환 타입을 선언하면 컴파일러가 모든 코드 경로에서 값을 반환하는지 검사합니다.
+- 함수는 최상위에서만 선언됩니다 — 함수 안에 함수는 없습니다. 대신 클로저를 쓰세요.

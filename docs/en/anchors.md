@@ -1,6 +1,8 @@
 # Anchors
 
-Anchors are Kyte's signature feature. They're event-driven entry points that can **automatically restart on failure**. Think of them as self-healing functions — if something goes wrong inside, the anchor picks itself back up and tries again.
+Anchors are Kyte's signature feature. They're not just functions — they're **structured entry points that can restart themselves on failure**.
+
+Normal error handling forces you to choose between try/catch pyramids or letting the process die. Anchors offer a third option: restart from the top and try again, with state preserved exactly where you want it.
 
 ---
 
@@ -20,59 +22,28 @@ The `@` prefix marks it as an anchor. `main` is the kind.
 
 ## Anchor Kinds
 
-| Syntax | Kind | Description |
-|---|---|---|
-| `@name(main)` | main | Primary program entry point |
-| `@name(plain)` | plain | Simple handler, no threading |
-| `@name(thread)` | thread | Runs on a separate OS thread |
-| `@name(event(error))` | event | Triggered by `emit("error", ...)` |
+| Syntax | Description |
+|---|---|
+| `@name(main)` | Program entry point. Exactly one per program. |
+| `@name(plain)` | Independent retry scope inside a parent anchor. |
+| `@name(thread)` | Runs on a separate OS thread. |
+| `@name(event(name))` | Handler triggered by `emit()`. |
 
 ---
 
 ## Kill — Triggering a Restart
 
-`Kill` signals the anchor to restart from the top:
+`Kill` restarts the anchor from the top:
 
 ```kyte
 @main(main) {
-    int attempt = 0;
-    attempt += 1;
+    Vault int attempts = 0;
+    attempts += 1;
 
-    print(attempt);
+    print(attempts);
 
-    if attempt < 3 {
-        Kill "simulating failure";   // restart!
-    }
-
-    print("stable after 3 attempts");
-}
-```
-
-Output:
-```
-1
-2
-3
-stable after 3 attempts
-```
-
-Wait — if the anchor restarts, why does `attempt` remember its value?
-
----
-
-## Vault — Persistent State Across Restarts
-
-Regular variables reset to their initial value on every restart. `Vault` variables survive restarts because they live on the heap:
-
-```kyte
-@main(main) {
-    Vault int attempt = 0;   // heap-allocated, survives Kill
-    attempt += 1;
-
-    print(attempt);
-
-    if attempt < 3 {
-        Kill "retry";
+    if attempts < 3 {
+        Kill "not ready yet";
     }
 
     print("done!");
@@ -87,13 +58,44 @@ Output:
 done!
 ```
 
-This is the classic retry pattern. Stack variables reset; Vault variables remember.
+`Vault int attempts` is the key. The variable lives on the heap, so it survives every restart. This is the retry pattern: **Vault for the counter, Kill to retry**.
+
+---
+
+## Stack vs Vault Across Restarts
+
+The difference matters:
+
+```kyte
+@main(main) {
+    int stack_val = 0;        // resets to 0 on every restart
+    Vault int heap_val = 0;   // survives restarts
+
+    stack_val += 1;
+    heap_val += 1;
+
+    print(f"stack: {stack_val}, heap: {heap_val}");
+
+    if heap_val < 3 {
+        Kill "retry";
+    }
+}
+```
+
+Output:
+```
+stack: 1, heap: 1
+stack: 1, heap: 2
+stack: 1, heap: 3
+```
+
+`stack_val` is always 1 — it re-initializes to 0 every restart. `heap_val` accumulates because it's on the heap.
 
 ---
 
 ## catch — Intercepting Kill
 
-By default, `Kill` restarts the anchor up to 3 times, then escalates to the parent. With a `catch` block, you intercept the `Kill` before it causes a restart:
+By default, `Kill` restarts the anchor. A `catch` block lets you observe or react to the Kill before the restart happens:
 
 ```kyte
 @main(main) {
@@ -106,136 +108,129 @@ By default, `Kill` restarts the anchor up to 3 times, then escalates to the pare
 
     print("all good");
 } catch (string reason) {
-    print(reason);
+    print(f"Kill fired: {reason}");
     // no break → anchor restarts
 }
 ```
 
-- **No `break` in catch** → anchor restarts from the top
-- **`break` in catch** → anchor exits immediately
+Output:
+```
+Kill fired: not ready yet
+Kill fired: not ready yet
+all good
+```
+
+**`break` inside catch** exits the anchor immediately without restarting:
 
 ```kyte
 @main(main) {
     risky_call();
-    Kill "abort";
 } catch (string why) {
-    print(why);
-    break;   // stop here — don't restart
+    print(f"failed: {why}");
+    break;   // stop here
 }
 ```
+
+| Catch behavior | Result |
+|---|---|
+| no `break` | anchor restarts |
+| `break` | anchor exits |
 
 ---
 
 ## Nested Anchors
 
-Anchors can be nested inside other anchors:
+Anchors can nest inside other anchors. Inner restarts stay contained — the outer anchor is unaffected:
 
 ```kyte
 @main(main) {
     Vault int outer = 0;
     outer += 1;
 
-    @retry(plain) {
-        Vault int inner = 0;
-        inner += 1;
-        if inner < 2 { Kill "inner retry"; }
-        print(f"inner done at {inner}");
+    @inner(plain) {
+        Vault int count = 0;
+        count += 1;
+        if count < 2 { Kill "inner retry"; }
+        print(f"inner done: {count}");
     }
 
     if outer < 2 { Kill "outer retry"; }
-    print(f"outer done at {outer}");
+    print(f"outer done: {outer}");
 }
 ```
 
-Each anchor has its own restart scope. Nested anchors don't cause the parent to restart.
+Output:
+```
+inner done: 2
+inner done: 2
+outer done: 2
+```
+
+`@inner` restarts twice before succeeding. `outer` doesn't change during those restarts.
 
 ---
 
 ## Thread Anchors
 
-`@name(thread)` spawns a supervised OS thread. The body runs concurrently with the parent anchor:
+`@name(thread)` runs on a separate OS thread concurrently with the parent:
 
 ```kyte
 @main(main) {
     @worker(thread) {
-        // runs on a separate thread
         Vault int count = 0;
         count += 1;
-        print(count);
-        if count < 5 {
-            Kill "retry worker";
-        }
+        print(f"worker: {count}");
+        if count < 3 { Kill "worker retry"; }
+        print("worker done");
     }
 
-    print("parent continues here");
+    print("main continues");
 }
 ```
 
-Thread anchors have their own restart loop — if the thread body hits `Kill`, the thread restarts independently without affecting the parent.
+If the worker hits `Kill`, only the worker restarts — the parent anchor is not affected. Use thread anchors for CPU-intensive work or blocking I/O you want off the main path.
 
 ---
 
 ## Event Anchors
 
-`@name(event(type))` registers a handler for a named event. The handler runs when `emit("type", payload)` is called anywhere in the program:
+`@name(event(type))` registers a named event handler. It fires whenever `emit("type", ...)` is called:
 
 ```kyte
 @main(main) {
     @on_error(event(error)) {
-        print(_payload);   // implicit string variable from emit()
+        print(f"[ERROR] {_payload}");
     }
 
-    emit("error", "connection lost");   // triggers on_error
-    emit("error", "timeout");           // triggers on_error again
+    emit("error", "connection lost");
+    emit("error", "timeout");
+    print("continuing...");
 }
+```
+
+Output:
+```
+[ERROR] connection lost
+[ERROR] timeout
+continuing...
 ```
 
 ### emit()
 
-```
-emit("event_name")                  // fire event, no payload
-emit("event_name", "payload string")  // fire event with payload
+```kyte
+emit("event_name");                    // no payload
+emit("event_name", "payload string");  // with string payload
 ```
 
-`emit()` is **synchronous** — it calls all matching handlers and waits for them to return before continuing.
+`emit()` is **synchronous** — all matching handlers run to completion before the next line executes.
 
 ### _payload
 
-Inside an event anchor body, `_payload` is an implicit `string` variable containing the payload passed to `emit()`. If no payload was given, `_payload` is an empty string.
-
-```kyte
-@main(main) {
-    @on_alert(event(alert)) {
-        print(f"Alert received: {_payload}");
-    }
-
-    emit("alert", "disk almost full");
-    // prints: Alert received: disk almost full
-}
-```
-
-### Event anchors and Kill
-
-Event handlers can also `Kill` to restart themselves:
-
-```kyte
-@main(main) {
-    @on_request(event(request)) {
-        Vault int tries = 0;
-        tries += 1;
-        if tries < 3 {
-            Kill "retrying request";
-        }
-        print(f"handled: {_payload} after {tries} tries");
-    }
-
-    emit("request", "fetch /api/data");
-}
-```
+Inside an event anchor, `_payload` is the string passed as the second argument to `emit()`. Empty string if no payload was given.
 
 ### Multiple handlers for the same event
 
-You can register multiple handlers for the same event name — all of them run in registration order:
+All of them run in registration order:
 
 ```kyte
 @main(main) {
@@ -247,44 +242,32 @@ You can register multiple handlers for the same event name — all of them run i
     }
 
     emit("error", "disk full");
-    // prints:
-    // [log] disk full
-    // [alert] disk full
 }
+```
+
+Output:
+```
+[log] disk full
+[alert] disk full
 ```
 
 ---
 
-## yield — Returning from an Anchor
+## When to Use Which Anchor
 
-Anchors can return values using `yield`:
-
-```kyte
-@compute(plain) {
-    int result = heavy_calculation();
-    yield result;
-}
-```
-
----
-
-## When to Use Anchors
-
-| Kind | Use when |
+| Situation | Anchor kind |
 |---|---|
-| `plain` | Isolated retry scope inside a parent anchor |
-| `thread` | CPU-bound or blocking work that should run concurrently |
-| `event` | Decoupled handler triggered by a named signal |
-| `main` | Program entry point (always required) |
-
-Traditional `try/catch` handles errors at the call site. Anchors handle them at the structure level — the whole anchor restarts, which is often exactly what you want.
+| Program entry point | `main` |
+| Isolate retry scope to one section | `plain` (nested) |
+| CPU-bound or blocking I/O | `thread` |
+| Decoupled handler for a named signal | `event` |
 
 ---
 
 ## Tips
 
-- `Kill` with no message: `Kill;` — message is optional.
-- An anchor that never hits `Kill` just runs once, like a normal function.
-- Thread anchors run concurrently — use `Vault` for shared state carefully.
-- Event handlers fire synchronously at the point `emit()` is called.
-- `_payload` is always a `string` inside event handlers; cast with `as` if needed.
+- `Kill` with no message: `Kill;` — the message is optional.
+- An anchor that never hits `Kill` runs once, like a normal function.
+- Thread anchors run concurrently — be careful with shared `Vault` state.
+- Event handlers fire synchronously at the `emit()` call site.
+- `_payload` is always `string`; use `as` to cast if needed.

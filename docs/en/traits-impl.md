@@ -1,52 +1,33 @@
 # Traits & Impl
 
-Traits define a contract — a set of functions that a type must implement. `impl` wires a type to a trait.
+A trait is a contract — it declares what functions a type must have. `impl` fulfills that contract for a specific type.
+
+Use traits when multiple structs need to share the same interface. For example, if both `Circle` and `Rect` must have an `area()` function, define that in a trait.
 
 ---
 
 ## Defining a Trait
 
+Trait bodies contain function signatures only — no implementations:
+
 ```kyte
-trait Greet {
-    fn greet(string name) -> string;
+trait Printable {
+    fn print_info();
 }
 
-trait Drawable {
-    fn draw();
+trait Shape {
     fn area() -> float;
+    fn describe();
 }
 ```
-
-Trait bodies contain function signatures only — no implementations.
 
 ---
 
 ## Implementing a Trait
 
-```kyte
-struct Dog {
-    string name;
-}
-
-impl Greet for Dog {
-    fn greet(string name) -> string {
-        return f"Woof! I'm {name}!";
-    }
-}
-```
-
-Now `Dog` satisfies the `Greet` contract. Every function in the trait must be implemented.
-
----
-
-## Full Example
+Use `impl TraitName for TypeName`. Inside the method body, access the current instance's fields via `TypeName.fieldName`:
 
 ```kyte
-trait Shape {
-    fn area() -> float;
-    fn describe();
-}
-
 struct Circle {
     float radius;
 }
@@ -61,7 +42,7 @@ impl Shape for Circle {
         return 3.14159 * Circle.radius * Circle.radius;
     }
     fn describe() {
-        print(f"Circle with radius {Circle.radius}");
+        print(f"circle, radius = {Circle.radius}");
     }
 }
 
@@ -70,29 +51,80 @@ impl Shape for Rect {
         return Rect.width * Rect.height;
     }
     fn describe() {
-        print(f"Rect {Rect.width}x{Rect.height}");
+        print(f"rect, {Rect.width} x {Rect.height}");
+    }
+}
+```
+
+`Circle.radius` inside `impl Shape for Circle` refers to the field of the current instance — not a static value.
+
+---
+
+## Calling Trait Methods
+
+Create an instance and call via `TypeName.method()`:
+
+```kyte
+@main(main) {
+    Circle c = Circle { radius: 5.0 };
+    Rect r   = Rect { width: 4.0, height: 3.0 };
+
+    float ca = Circle.area();   // resolved to Circle's impl
+    float ra = Rect.area();     // resolved to Rect's impl
+
+    Circle.describe();   // circle, radius = 5.0
+    Rect.describe();     // rect, 4.0 x 3.0
+}
+```
+
+---
+
+## Multiple Traits on One Type
+
+A struct can implement any number of traits — just write separate `impl` blocks:
+
+```kyte
+trait Named {
+    fn name() -> string;
+}
+
+trait Drawable {
+    fn draw();
+}
+
+struct Button {
+    string label;
+    int x;
+    int y;
+}
+
+impl Named for Button {
+    fn name() -> string {
+        return Button.label;
+    }
+}
+
+impl Drawable for Button {
+    fn draw() {
+        print(f"[{Button.label}] @ ({Button.x}, {Button.y})");
     }
 }
 ```
 
 ---
 
-## Calling Trait Methods
+## Why Use Traits?
 
-Call the methods using the type-qualified name:
+You could write `fn Circle.area()` and `fn Rect.area()` separately without a trait. What traits add:
 
-```kyte
-@main(main) {
-    Circle c = Circle { radius: 5.0 };
-    float a = Circle.area();
-    Circle.describe();
-}
-```
+- **Enforcement** — the compiler verifies you've implemented every declared function.
+- **Explicit contract** — "this type behaves like a Shape" is stated in code, not comments.
+- **Consistent API** — same function names and signatures across all implementing types.
 
 ---
 
-## Tips
+## Current Limitations
 
-- A type can implement multiple traits — just write multiple `impl` blocks.
-- Traits are a great way to enforce consistent APIs across different struct types.
-- Unlike Rust, there's no `dyn Trait` dispatch yet — trait calls are resolved at compile time.
+- No dynamic dispatch (`dyn Trait` style) — all trait calls are resolved at compile time.
+- No trait inheritance.
+- No default method implementations — every method must be implemented explicitly.

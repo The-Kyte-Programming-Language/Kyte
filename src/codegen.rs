@@ -60,9 +60,13 @@ pub struct Codegen<'ctx> {
     freed_vault_vars: std::collections::HashSet<String>,
     vault_scope_stack: Vec<Vec<String>>,
     break_cleanup_depth: Option<usize>,
+    continue_cleanup_depth: Option<usize>,
 
     /// break 시 점프할 블록 (loop/for 용)
     break_bb: Option<BasicBlock<'ctx>>,
+
+    /// continue 시 점프할 블록 (loop/for 용)
+    continue_bb: Option<BasicBlock<'ctx>>,
 
     /// Kill 시 점프할 복구 블록 스택 (anchor recovery)
     recovery_stack: Vec<BasicBlock<'ctx>>,
@@ -140,7 +144,9 @@ impl<'ctx> Codegen<'ctx> {
             freed_vault_vars: std::collections::HashSet::new(),
             vault_scope_stack: Vec::new(),
             break_cleanup_depth: None,
+            continue_cleanup_depth: None,
             break_bb: None,
+            continue_bb: None,
             recovery_stack: Vec::new(),
             anchor_restart_bb_stack: Vec::new(),
             kill_cleanup_depth_stack: Vec::new(),

@@ -1,0 +1,55 @@
+// Closures can't be value-tested in AST interpreter — use #test(success)
+// Note: empty closure || is not supported (|| lexes as Token::Or)
+// Use at least one parameter in closures
+
+#test(success)
+fn closure_basic() {
+    auto add = |a: int, b: int| { return a + b; };
+    int result = add(3, 4);
+    print(result);
+}
+
+#test(success)
+fn closure_single_param() {
+    auto double = |n: int| { return n * 2; };
+    int result = double(7);
+    print(result);
+}
+
+#test(success)
+fn closure_nested() {
+    auto outer = |x: int| {
+        auto inner = |y: int| { return x + y; };
+        return inner(10);
+    };
+    int result = outer(5);
+    print(result);
+}
+
+#test(success)
+fn closure_capture_and_call() {
+    auto square = |n: int| { return n * n; };
+    int result = square(5);
+    print(result);
+}
+
+#test(success)
+fn closure_bool_return() {
+    auto is_pos = |n: int| { return n > 0; };
+    // Use auto to avoid type mismatch — closure return type is inferred as auto
+    auto r = is_pos(5);
+    print(r);
+}
+
+#test(success)
+fn closure_multi_use() {
+    auto triple = |n: int| { return n * 3; };
+    int a = triple(4);
+    int b = triple(5);
+    print(a);
+    print(b);
+}
+
+@main(main) {
+    print("closure tests");
+}

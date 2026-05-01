@@ -108,6 +108,29 @@ impl<'ctx> Codegen<'ctx> {
         ptr
     }
 
+    /// Creates a string global using only module-level LLVM API (no builder position needed).
+    /// Use this when there is no active insert position (e.g., top-level const initialization).
+    pub(super) fn global_string_const(&mut self, value: &str, prefix: &str) -> PointerValue<'ctx> {
+        if let Some(ptr) = self.string_globals.get(value).copied() {
+            return ptr;
+        }
+        let name = format!("{}_{}", prefix, self.string_global_counter);
+        self.string_global_counter += 1;
+        let bytes: Vec<u8> = value.bytes().chain(std::iter::once(0u8)).collect();
+        let i8_ty = self.context.i8_type();
+        let arr_ty = i8_ty.array_type(bytes.len() as u32);
+        let global = self.module.add_global(arr_ty, None, &name);
+        global.set_constant(true);
+        global.set_linkage(inkwell::module::Linkage::Private);
+        let char_vals: Vec<_> =
+            bytes.iter().map(|&b| i8_ty.const_int(b as u64, false)).collect();
+        let const_arr = i8_ty.const_array(&char_vals);
+        global.set_initializer(&const_arr);
+        let ptr = global.as_pointer_value();
+        self.string_globals.insert(value.to_string(), ptr);
+        ptr
+    }
+
     pub(super) fn global_string_ptr(&mut self, value: &str, prefix: &str) -> PointerValue<'ctx> {
         if let Some(ptr) = self.string_globals.get(value).copied() {
             return ptr;

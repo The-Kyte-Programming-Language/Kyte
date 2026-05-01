@@ -1,0 +1,11 @@
+@main(main) {
+    string a = "hello";
+    string b = " world";
+    string c = a + b;
+    print(c);
+
+    string x = "foo";
+    string y = "bar";
+    string z = x + y + "!";
+    print(z);
+}

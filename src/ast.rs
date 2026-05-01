@@ -426,6 +426,12 @@ pub enum TopLevel {
         name: String,
         value: Expr,
     },
+    // extern fn malloc(size: u64) -> Handle; — C FFI declaration (stdlib-internal)
+    ExternFn {
+        name: String,
+        params: Vec<Param>,
+        return_ty: Option<Ty>,
+    },
 }
 
 // 프로그램 전체

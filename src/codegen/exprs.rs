@@ -388,18 +388,25 @@ impl<'ctx> Codegen<'ctx> {
                 cl_fn.as_global_value().as_pointer_value().into()
             }
             Expr::FStringLit(parts) => {
-                // f-string: snprintf를 이용해 각 파트를 버퍼에 누적
+                // f-string: snprintf를 이용해 각 파트를 버퍼에 누적.
+                // malloc을 사용하므로 반환값이 함수 경계를 넘어도 유효하다.
+                // (스택 alloca를 반환하면 함수 리턴 후 댕글링 포인터가 된다.)
                 let buf_size = 4096u64;
-                // i8 타입으로 배열 alloca (포인터로 바로 사용)
                 let i8_ty = self.context.i8_type();
+                let malloc_fn = self.module.get_function("malloc").unwrap();
                 let alloca = self
                     .builder
-                    .build_array_alloca(
-                        i8_ty,
-                        self.i64_type().const_int(buf_size, false),
+                    .build_call(
+                        malloc_fn,
+                        &[self.i64_type().const_int(buf_size, false).into()],
                         "fstr_buf",
                     )
-                    .unwrap();
+                    .unwrap()
+                    .try_as_basic_value()
+                    .basic()
+                    .unwrap()
+                    .into_pointer_value();
+                self.emit_null_check(alloca, "fstring_alloc");
                 // buf[0] = '\0'
                 let zero_i8 = i8_ty.const_zero();
                 self.builder.build_store(alloca, zero_i8).unwrap();

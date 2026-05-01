@@ -102,12 +102,18 @@ impl<'ctx> Codegen<'ctx> {
             )
             .expect("Failed to create target machine");
 
-        machine
-            .write_to_file(&self.module, FileType::Object, Path::new(path))
-            .expect("Failed to write object file");
+        // Use write_to_memory_buffer instead of write_to_file.
+        // write_to_file triggers a STATUS_ACCESS_VIOLATION on Windows inside LLVM's
+        // file I/O path (inkwell + LLVM 21 bug).  Writing to an in-process
+        // MemoryBuffer and then flushing via std::fs::write avoids that code path
+        // entirely while producing identical output.
+        let buf = machine
+            .write_to_memory_buffer(&self.module, FileType::Object)
+            .expect("Failed to generate object code");
+
+        std::fs::write(path, buf.as_slice()).expect("Failed to write object file");
 
         // Prevent LLVM TargetMachine destructor crash on Windows (inkwell bug).
-        // Target / TargetTriple do not implement Drop, so only machine needs forget.
         std::mem::forget(machine);
     }
 

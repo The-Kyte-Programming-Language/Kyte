@@ -373,9 +373,10 @@ impl<'ctx> Codegen<'ctx> {
 
         self.emit_null_check(buf, "string_concat");
 
-        if let Some(top) = self.string_temp_stack.last_mut() {
-            top.push(buf);
-        }
+        // Do NOT track in string_temp_stack.  Strings may be assigned to
+        // variables or returned from functions, so eagerly freeing them at
+        // scope exit causes use-after-free.  We accept the corresponding
+        // memory leak until a proper ownership/RC system is added.
 
         let fmt = self.global_string_ptr("%s%s", "concat_fmt");
         self.builder
@@ -416,15 +417,29 @@ impl<'ctx> Codegen<'ctx> {
                 .into_pointer_value();
         }
 
-        // Numeric: fixed 32-byte stack buffer — no malloc, single snprintf
-        // Max length: i64 = 20 chars, f64 = ~25 chars — 32 is always sufficient
+        // Numeric: fixed 32-byte stack buffer — no malloc, single snprintf.
+        // Max length: i64 = 20 chars, f64 = ~25 chars — 32 is always sufficient.
+        // Alloca is hoisted to the function entry block so it does not grow the
+        // stack on each loop iteration when string-concat is used inside a loop.
         let snprintf = self.module.get_function("snprintf").unwrap();
         let i8_ty = self.context.i8_type();
         let buf_size = 32u64;
-        let buf = self
-            .builder
-            .build_array_alloca(i8_ty, self.i64_type().const_int(buf_size, false), "num_buf")
-            .unwrap();
+        let buf = {
+            let entry_bb = self.current_fn.unwrap().get_first_basic_block().unwrap();
+            let cur_bb = self.builder.get_insert_block();
+            match entry_bb.get_first_instruction() {
+                Some(inst) => self.builder.position_before(&inst),
+                None => self.builder.position_at_end(entry_bb),
+            }
+            let b = self
+                .builder
+                .build_array_alloca(i8_ty, self.i64_type().const_int(buf_size, false), "num_buf")
+                .unwrap();
+            if let Some(bb) = cur_bb {
+                self.builder.position_at_end(bb);
+            }
+            b
+        };
 
         let (fmt_ptr, arg): (PointerValue<'ctx>, BasicMetadataValueEnum<'ctx>) = match ty {
             Ty::Float => {

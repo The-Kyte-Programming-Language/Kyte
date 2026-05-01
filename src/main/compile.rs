@@ -10,6 +10,55 @@ use kyte::parser::Parser;
 
 use super::cache;
 
+/// Compile `ir_path` (.ll) to `obj_path` (.o).
+///
+/// Strategy 1 — external `llc`: avoids the STATUS_ACCESS_VIOLATION that
+/// `LLVMTargetMachineEmitToMemoryBuffer` triggers on LLVM 21 + Windows.
+/// Strategy 2 — inkwell `write_object_file`: fallback for platforms where
+/// llc is not installed.
+fn emit_object_file(
+    ir_path: &str,
+    obj_path: &str,
+    codegen: &mut Codegen<'_>,
+) -> Result<(), String> {
+    // Search for llc in standard locations (Windows-first, then PATH).
+    let candidates: &[&str] = &[
+        r"C:\llvm\bin\llc.exe",
+        r"C:\Program Files\LLVM\bin\llc.exe",
+        "llc",
+    ];
+
+    for &llc in candidates {
+        match std::process::Command::new(llc)
+            .args([ir_path, "-filetype=obj", "-o", obj_path])
+            .output()
+        {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => {
+                return Err(format!(
+                    "llc exited with {}: {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Err(_) => {} // not found or not executable — try next candidate
+        }
+    }
+
+    // llc not available: fall back to inkwell.
+    // Note: this path crashes on Windows LLVM 21 (STATUS_ACCESS_VIOLATION).
+    catch_unwind(AssertUnwindSafe(|| {
+        codegen.write_object_file(obj_path);
+    }))
+    .map_err(|panic| {
+        panic
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "object file generation failed".to_string())
+    })
+}
+
 pub(super) fn compile_source(
     source: &str,
     label: &str,
@@ -137,24 +186,15 @@ pub(super) fn compile_source(
         let mut obj_written = false;
         if label.ends_with(".ky") {
             let obj_path = cache::obj_path_for(label);
-            let obj_result = catch_unwind(AssertUnwindSafe(|| {
-                codegen.write_object_file(&obj_path);
-            }));
-            match obj_result {
+            match emit_object_file(&ir_path, &obj_path, &mut codegen) {
                 Ok(()) => {
                     if incremental {
                         cache::save_to_cache(source_hash, &obj_path);
-                        // Evict stale cache entries to prevent unbounded growth.
                         cache::evict_stale(source_hash);
                     }
                     obj_written = true;
                 }
-                Err(panic) => {
-                    let msg = panic
-                        .downcast_ref::<String>()
-                        .cloned()
-                        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "object file generation failed".to_string());
+                Err(msg) => {
                     eprintln!("  warning: object file write failed: {}", msg);
                     eprintln!("  (IR file was written to {})", ir_path);
                 }

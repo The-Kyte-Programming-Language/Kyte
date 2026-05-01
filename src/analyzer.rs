@@ -371,6 +371,7 @@ impl Analyzer {
                     }
                 }
                 TopLevel::ConstDecl { .. } => {} // 최상위 const는 값 체크 생략 (간단히 통과)
+                TopLevel::ExternFn { .. } => {} // extern declarations handled in codegen
             }
         }
 

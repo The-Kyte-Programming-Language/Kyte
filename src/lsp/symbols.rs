@@ -243,5 +243,7 @@ fn build_symbol(
                 children: Some(children),
             })
         }
+
+        TopLevel::ExternFn { .. } => None, // extern declarations not shown as symbols
     }
 }

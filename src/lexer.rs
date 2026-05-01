@@ -306,6 +306,7 @@ impl Lexer {
             "const" => Token::Const,
             "import" => Token::Import,
             "catch" => Token::Catch,
+            "extern" => Token::Extern,
             "int" => Token::Int,
             "float" => Token::Float,
             "string" => Token::String,
@@ -525,5 +526,18 @@ impl Lexer {
             }
         }
         tokens
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Token;
+
+    #[test]
+    fn extern_keyword_tokenizes() {
+        let mut lexer = Lexer::new("extern fn malloc(size: u64);");
+        let toks: Vec<Token> = lexer.tokenize().into_iter().map(|(t, _, _, _)| t).collect();
+        assert!(toks.contains(&Token::Extern), "expected Token::Extern in {:?}", toks);
     }
 }

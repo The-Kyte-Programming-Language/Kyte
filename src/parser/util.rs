@@ -384,6 +384,10 @@ impl Parser {
                 self.advance();
                 "import".to_string()
             }
+            Token::When => {
+                self.advance();
+                "when".to_string()
+            }
             t => {
                 self.errors.push(format!(
                     "Expected identifier but got {:?} at line {}:{}",

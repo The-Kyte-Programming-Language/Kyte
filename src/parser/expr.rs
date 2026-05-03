@@ -29,6 +29,7 @@ impl Parser {
         self.parse_pipe_tail(left)
     }
 
+    // pub(super): called from stmt.rs for statement-level pipe chains (e.g. `x >> f >> g`)
     pub(super) fn parse_pipe_tail(&mut self, mut left: Expr) -> Expr {
         while self.current() == &Token::PipeOp {
             self.advance();

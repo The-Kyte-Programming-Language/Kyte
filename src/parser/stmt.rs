@@ -481,6 +481,25 @@ impl Parser {
                         variant,
                         binding,
                     }
+                } else if self.current() == &Token::LBrace {
+                    // StructName { field, field: sub_pattern, ... }
+                    self.advance(); // consume {
+                    let mut fields = Vec::new();
+                    while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+                        let field_name = self.eat_ident();
+                        let sub = if self.current() == &Token::Colon {
+                            self.advance();
+                            Some(Box::new(self.parse_pattern()))
+                        } else {
+                            None // shorthand: bind field to same-name variable
+                        };
+                        fields.push((field_name, sub));
+                        if self.current() == &Token::Comma {
+                            self.advance();
+                        }
+                    }
+                    self.expect(&Token::RBrace);
+                    Pattern::StructDestructure { struct_name: name, fields }
                 } else {
                     Pattern::Binding(name)
                 }

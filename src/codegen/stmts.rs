@@ -1203,6 +1203,10 @@ impl<'ctx> Codegen<'ctx> {
                             Pattern::Binding(_) => {
                                 self.builder.build_unconditional_branch(arm_bb).unwrap();
                             }
+                            Pattern::StructDestructure { .. } => {
+                                // Type system guarantees this is the correct struct type
+                                self.builder.build_unconditional_branch(arm_bb).unwrap();
+                            }
                             _ => {
                                 self.builder.build_unconditional_branch(next_bb).unwrap();
                             }
@@ -1217,6 +1221,64 @@ impl<'ctx> Codegen<'ctx> {
                             self.builder.build_store(alloca, val).unwrap();
                             self.variables.insert(bind_name.clone(), alloca);
                             self.var_types.insert(bind_name.clone(), bind_ty);
+                        }
+
+                        // Struct destructuring: extract and bind fields
+                        if let Pattern::StructDestructure { struct_name, fields } = &arm.pattern {
+                            let struct_val = val.into_struct_value();
+                            for (field_name, sub_pattern) in fields {
+                                match sub_pattern {
+                                    None => {
+                                        // Shorthand: bind field to same-name variable
+                                        if let Some((idx, field_ty)) = self.struct_field_info(struct_name, field_name) {
+                                            let field_val = self.builder
+                                                .build_extract_value(struct_val, idx, &format!("fld_{}", field_name))
+                                                .unwrap();
+                                            let alloca = self.build_alloca(field_name, &field_ty);
+                                            self.builder.build_store(alloca, field_val).unwrap();
+                                            self.variables.insert(field_name.clone(), alloca);
+                                            self.var_types.insert(field_name.clone(), field_ty);
+                                        }
+                                    }
+                                    Some(sub) => {
+                                        // Nested pattern: extract field value, handle sub-pattern
+                                        if let Some((idx, field_ty)) = self.struct_field_info(struct_name, field_name) {
+                                            let field_val = self.builder
+                                                .build_extract_value(struct_val, idx, &format!("fld_{}", field_name))
+                                                .unwrap();
+                                            if let Pattern::EnumVariant { enum_name, variant, binding: Some(bind_name) } = sub.as_ref() {
+                                                if let Ty::Enum(ename) = &field_ty {
+                                                    if let Some(variants) = self.enum_defs.get(ename).cloned() {
+                                                        if let Some(v) = variants.iter().find(|v| v.name == *variant) {
+                                                            if let Some(ref payload_ty) = v.ty {
+                                                                // Store field value to alloca so we can GEP into it
+                                                                let field_alloca = self.build_alloca(
+                                                                    &format!("fld_enum_{}", field_name),
+                                                                    &field_ty,
+                                                                );
+                                                                self.builder.build_store(field_alloca, field_val).unwrap();
+                                                                let enum_st = self.enum_types[ename];
+                                                                let payload_ptr = self.builder
+                                                                    .build_struct_gep(enum_st, field_alloca, 1, "payload_ptr")
+                                                                    .unwrap();
+                                                                let payload_llvm_ty = self.ty_to_basic(payload_ty);
+                                                                let payload_val = self.builder
+                                                                    .build_load(payload_llvm_ty, payload_ptr, bind_name)
+                                                                    .unwrap();
+                                                                let bind_alloca = self.build_alloca(bind_name, payload_ty);
+                                                                self.builder.build_store(bind_alloca, payload_val).unwrap();
+                                                                self.variables.insert(bind_name.clone(), bind_alloca);
+                                                                self.var_types.insert(bind_name.clone(), payload_ty.clone());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let _ = enum_name; // suppress unused warning
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Guard check: if guard fails, skip this arm and go to next_bb

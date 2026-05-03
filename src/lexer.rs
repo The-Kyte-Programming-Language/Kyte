@@ -308,6 +308,7 @@ impl Lexer {
             "import" => Token::Import,
             "catch" => Token::Catch,
             "extern" => Token::Extern,
+            "when" => Token::When,
             "int" => Token::Int,
             "float" => Token::Float,
             "string" => Token::String,
@@ -432,6 +433,9 @@ impl Lexer {
                             if self.current() == Some('=') {
                                 self.advance();
                                 Token::Ge
+                            } else if self.current() == Some('>') {
+                                self.advance();
+                                Token::PipeOp
                             } else {
                                 Token::Gt
                             }

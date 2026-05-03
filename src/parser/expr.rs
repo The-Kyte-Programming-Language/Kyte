@@ -19,9 +19,35 @@ impl Parser {
             self.depth -= 1;
             return Expr::IntLit(0);
         }
-        let result = self.parse_or();
+        let result = self.parse_pipe();
         self.depth -= 1;
         result
+    }
+
+    fn parse_pipe(&mut self) -> Expr {
+        let left = self.parse_or();
+        self.parse_pipe_tail(left)
+    }
+
+    pub(super) fn parse_pipe_tail(&mut self, mut left: Expr) -> Expr {
+        while self.current() == &Token::PipeOp {
+            self.advance();
+            let span = self.current_span();
+            let fn_name = self.eat_ident();
+            let mut args = vec![left];
+            if self.current() == &Token::LParen {
+                self.advance();
+                while self.current() != &Token::RParen && self.current() != &Token::EOF {
+                    args.push(self.parse_expr());
+                    if self.current() == &Token::Comma {
+                        self.advance();
+                    }
+                }
+                self.expect(&Token::RParen);
+            }
+            left = Expr::Call { name: fn_name, args, span };
+        }
+        left
     }
 
     fn parse_or(&mut self) -> Expr {

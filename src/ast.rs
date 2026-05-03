@@ -39,6 +39,8 @@ pub enum Token {
     Import,   // import
     Catch,    // catch
     Extern,   // extern
+    PipeOp,   // >>
+    When,     // when
 
     // 타입
     Int,    // int

@@ -54,7 +54,8 @@ impl Parser {
         } else {
             Expr::Ident(name, span)
         };
-        let expr = self.parse_postfix_expr(base);
+        let postfix = self.parse_postfix_expr(base);
+        let expr = self.parse_pipe_tail(postfix);
 
         // 복합 대입 연산자 (+=, -=, *=, /=, %=)
         let compound_op = match self.current() {
@@ -134,7 +135,10 @@ impl Parser {
             };
         }
 
-        self.expect(&Token::Semicolon);
+        // Semicolon is optional after a pipe-chain expression statement
+        if self.current() == &Token::Semicolon {
+            self.advance();
+        }
         Stmt::ExprStmt(expr)
     }
 
@@ -393,11 +397,21 @@ impl Parser {
         let mut arms = Vec::new();
         while self.current() != &Token::RBrace && self.current() != &Token::EOF {
             let pattern = self.parse_pattern();
+            let guard = if self.current() == &Token::When {
+                self.advance();
+                let prev_no_struct = self.no_struct_init;
+                self.no_struct_init = true;
+                let g = self.parse_expr();
+                self.no_struct_init = prev_no_struct;
+                Some(g)
+            } else {
+                None
+            };
             self.expect(&Token::FatArrow);
             self.expect(&Token::LBrace);
             let body = self.parse_body();
             self.expect(&Token::RBrace);
-            arms.push(MatchArm { pattern, body });
+            arms.push(MatchArm { pattern, guard, body });
             // optional trailing comma
             if self.current() == &Token::Comma {
                 self.advance();
@@ -467,9 +481,27 @@ impl Parser {
                         variant,
                         binding,
                     }
+                } else if self.current() == &Token::LBrace {
+                    // StructName { field, field: sub_pattern, ... }
+                    self.advance(); // consume {
+                    let mut fields = Vec::new();
+                    while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+                        let field_name = self.eat_ident();
+                        let sub = if self.current() == &Token::Colon {
+                            self.advance();
+                            Some(Box::new(self.parse_pattern()))
+                        } else {
+                            None // shorthand: bind field to same-name variable
+                        };
+                        fields.push((field_name, sub));
+                        if self.current() == &Token::Comma {
+                            self.advance();
+                        }
+                    }
+                    self.expect(&Token::RBrace);
+                    Pattern::StructDestructure { struct_name: name, fields }
                 } else {
-                    // wildcard: _ 또는 그냥 identifier (사용 안 함 — wildcard 취급)
-                    Pattern::Wildcard
+                    Pattern::Binding(name)
                 }
             }
             _ => {

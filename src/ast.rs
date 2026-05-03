@@ -39,6 +39,8 @@ pub enum Token {
     Import,   // import
     Catch,    // catch
     Extern,   // extern
+    PipeOp,   // >>
+    When,     // when
 
     // 타입
     Int,    // int
@@ -361,6 +363,7 @@ pub struct TraitMethod {
 #[derive(Debug, PartialEq, Clone)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub body: Vec<(Stmt, Span)>,
 }
 
@@ -376,6 +379,16 @@ pub enum Pattern {
         binding: Option<String>,
     },
     Wildcard,
+    // Bare identifier: matches any value and binds it to a name
+    Binding(String),
+    // TypeName { field, field: sub_pattern }
+    StructDestructure {
+        struct_name: String,
+        // (field_name, sub_pattern):
+        //   None  = shorthand — bind field to variable of same name
+        //   Some  = nested pattern match on field value
+        fields: Vec<(String, Option<Box<Pattern>>)>,
+    },
 }
 
 // 최상위 선언

@@ -1,0 +1,15 @@
+fn double(int n) -> int { return n * 2; }
+fn add_ten(int n) -> int { return n + 10; }
+fn clamp(int n, int lo, int hi) -> int {
+    if n < lo { return lo; }
+    if n > hi { return hi; }
+    return n;
+}
+
+@main(main) {
+    int x = 5;
+    x >> double >> print
+    x >> add_ten >> print
+    x >> clamp(0, 8) >> print
+    x >> double >> add_ten >> print
+}

@@ -407,13 +407,16 @@ impl Analyzer {
                 let mut has_wildcard = false;
                 for arm in arms {
                     match &arm.pattern {
-                        Pattern::Wildcard => {
+                        Pattern::Wildcard | Pattern::Binding(_) => {
                             has_wildcard = true;
                         }
                         Pattern::IntLit(_)
                         | Pattern::FloatLit(_)
                         | Pattern::StringLit(_)
                         | Pattern::Bool(_) => {}
+                        Pattern::StructDestructure { .. } => {
+                            // doesn't universally wildcard — only matches this struct type
+                        }
                         Pattern::EnumVariant {
                             enum_name,
                             variant,
@@ -470,6 +473,80 @@ impl Analyzer {
                                     );
                                 }
                             }
+                        }
+                    }
+                    if let Pattern::Binding(bind_name) = &arm.pattern {
+                        arm_scope.insert(
+                            bind_name.clone(),
+                            VarInfo {
+                                ty: expr_ty.clone().unwrap_or(Ty::Int),
+                                is_vault: false,
+                            },
+                        );
+                    }
+                    if let Pattern::StructDestructure { struct_name, fields } = &arm.pattern {
+                        if let Some(struct_fields) = self.structs.get(struct_name).cloned() {
+                            for (field_name, sub_pattern) in fields {
+                                if let Some(sf) = struct_fields.iter().find(|f| f.name == *field_name) {
+                                    match sub_pattern {
+                                        None => {
+                                            // Shorthand { x } → bind field x to variable x
+                                            arm_scope.insert(
+                                                field_name.clone(),
+                                                VarInfo {
+                                                    ty: sf.ty.clone(),
+                                                    is_vault: false,
+                                                },
+                                            );
+                                        }
+                                        Some(sub) => {
+                                            // Nested pattern — extract bindings from sub-pattern
+                                            if let Pattern::EnumVariant {
+                                                enum_name,
+                                                variant,
+                                                binding: Some(bind_name),
+                                            } = sub.as_ref()
+                                            {
+                                                if let Some(variants) = self.enums.get(enum_name) {
+                                                    if let Some(v) = variants.iter().find(|v| v.name == *variant) {
+                                                        if let Some(ref payload_ty) = v.ty {
+                                                            arm_scope.insert(
+                                                                bind_name.clone(),
+                                                                VarInfo {
+                                                                    ty: payload_ty.clone(),
+                                                                    is_vault: false,
+                                                                },
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    self.err(
+                                        "E042",
+                                        format!("Struct '{}' has no field '{}'", struct_name, field_name),
+                                        "Check the struct declaration for available fields".to_string(),
+                                    );
+                                }
+                            }
+                        } else {
+                            self.err(
+                                "E043",
+                                format!("Unknown struct '{}' in pattern", struct_name),
+                                format!("Declare 'struct {} {{ ... }}' before using it", struct_name),
+                            );
+                        }
+                    }
+                    if let Some(guard_expr) = &arm.guard {
+                        let guard_ty = self.infer_expr(guard_expr, &arm_scope);
+                        if guard_ty != Some(Ty::Bool) {
+                            self.err(
+                                "E041",
+                                format!("Guard in 'when' must be bool, got {:?}", guard_ty),
+                                "Use a boolean expression as the guard condition".to_string(),
+                            );
                         }
                     }
                     self.check_scoped_block(&arm.body, &mut arm_scope, return_ty, false);

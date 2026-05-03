@@ -1,0 +1,31 @@
+struct Point {
+    int x;
+    int y;
+}
+
+enum Status {
+    Active,
+    Banned(int),
+}
+
+struct User {
+    string name;
+    int age;
+    Status status;
+}
+
+@main(main) {
+    Point p = Point { x: 3, y: 7 };
+
+    match p {
+        Point { x, y } when x > 0 => { print(f"right: {x} {y}"); }
+        Point { x, y }             => { print(f"left:  {x} {y}"); }
+    }
+
+    User u = User { name: "alice", age: 25, status: Status.Banned(42) };
+
+    match u {
+        User { name, status: Status.Banned(code) } => { print(f"{name} banned {code}"); }
+        User { name, status: Status.Active }        => { print(f"{name} active"); }
+    }
+}

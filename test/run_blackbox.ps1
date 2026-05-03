@@ -37,6 +37,9 @@ $Expected = @{
     "18_constants.ky"      = "100`n3.140000`ntrue`nconstant`n101"
     "19_nested_loops.ky"   = "9`n14"
     "20_multiple_returns.ky" = "0`n1`n2`n3`n3"
+    "21_pipe.ky"             = "10`n15`n5`n20"
+    "22_guard.ky"            = "B`nbig ok"
+    "23_destructure.ky"      = "right: 3 7`nalice banned 42"
 }
 
 # Setup

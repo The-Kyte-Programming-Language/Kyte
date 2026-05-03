@@ -1042,7 +1042,7 @@ impl<'ctx> Codegen<'ctx> {
                                         }
                                     }
                                 }
-                                Pattern::Wildcard => {
+                                Pattern::Wildcard | Pattern::Binding(_) => {
                                     wildcard_idx = Some(i);
                                 }
                                 _ => {}

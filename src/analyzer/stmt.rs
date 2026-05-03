@@ -485,7 +485,7 @@ impl Analyzer {
                         let guard_ty = self.infer_expr(guard_expr, &arm_scope);
                         if guard_ty != Some(Ty::Bool) {
                             self.err(
-                                "E038",
+                                "E041",
                                 format!("Guard in 'when' must be bool, got {:?}", guard_ty),
                                 "Use a boolean expression as the guard condition".to_string(),
                             );

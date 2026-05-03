@@ -399,7 +399,11 @@ impl Parser {
             let pattern = self.parse_pattern();
             let guard = if self.current() == &Token::When {
                 self.advance();
-                Some(self.parse_expr())
+                let prev_no_struct = self.no_struct_init;
+                self.no_struct_init = true;
+                let g = self.parse_expr();
+                self.no_struct_init = prev_no_struct;
+                Some(g)
             } else {
                 None
             };

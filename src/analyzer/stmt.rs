@@ -407,7 +407,7 @@ impl Analyzer {
                 let mut has_wildcard = false;
                 for arm in arms {
                     match &arm.pattern {
-                        Pattern::Wildcard => {
+                        Pattern::Wildcard | Pattern::Binding(_) => {
                             has_wildcard = true;
                         }
                         Pattern::IntLit(_)
@@ -470,6 +470,25 @@ impl Analyzer {
                                     );
                                 }
                             }
+                        }
+                    }
+                    if let Pattern::Binding(bind_name) = &arm.pattern {
+                        arm_scope.insert(
+                            bind_name.clone(),
+                            VarInfo {
+                                ty: expr_ty.clone().unwrap_or(Ty::Int),
+                                is_vault: false,
+                            },
+                        );
+                    }
+                    if let Some(guard_expr) = &arm.guard {
+                        let guard_ty = self.infer_expr(guard_expr, &arm_scope);
+                        if guard_ty != Some(Ty::Bool) {
+                            self.err(
+                                "E038",
+                                format!("Guard in 'when' must be bool, got {:?}", guard_ty),
+                                "Use a boolean expression as the guard condition".to_string(),
+                            );
                         }
                     }
                     self.check_scoped_block(&arm.body, &mut arm_scope, return_ty, false);

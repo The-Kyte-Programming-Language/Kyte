@@ -1,0 +1,22 @@
+enum Result {
+    Ok(int),
+    Err,
+}
+
+@main(main) {
+    int score = 85;
+
+    match score {
+        n when n >= 90 => { print("A"); }
+        n when n >= 80 => { print("B"); }
+        n when n >= 70 => { print("C"); }
+        n              => { print("F"); }
+    }
+
+    Result r = Result.Ok(150);
+    match r {
+        Result.Ok(val) when val > 100 => { print("big ok"); }
+        Result.Ok(val)                => { print("ok"); }
+        Result.Err                    => { print("err"); }
+    }
+}

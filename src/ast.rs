@@ -363,6 +363,7 @@ pub struct TraitMethod {
 #[derive(Debug, PartialEq, Clone)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub body: Vec<(Stmt, Span)>,
 }
 
@@ -378,6 +379,8 @@ pub enum Pattern {
         binding: Option<String>,
     },
     Wildcard,
+    // Bare identifier: matches any value and binds it to a name
+    Binding(String),
 }
 
 // 최상위 선언

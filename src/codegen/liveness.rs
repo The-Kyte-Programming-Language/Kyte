@@ -73,7 +73,11 @@ pub(super) fn stmt_uses(stmt: &Stmt, name: &str) -> bool {
                     .map_or(false, |b| stmts_use(b, name))
         }
         Stmt::Match { expr, arms } => {
-            expr_uses(expr, name) || arms.iter().any(|arm| stmts_use(&arm.body, name))
+            expr_uses(expr, name)
+                || arms.iter().any(|arm| {
+                    arm.guard.as_ref().map_or(false, |g| expr_uses(g, name))
+                        || stmts_use(&arm.body, name)
+                })
         }
     }
 }

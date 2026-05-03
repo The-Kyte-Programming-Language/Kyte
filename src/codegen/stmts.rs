@@ -853,107 +853,275 @@ impl<'ctx> Codegen<'ctx> {
                 let merge_bb = self.context.append_basic_block(func, "match_merge");
 
                 if let Ty::Enum(ref ename) = expr_ty {
-                    // ── enum match: LLVM switch on tag ──
+                    // ── enum match ──
+                    // Check whether any arm has a guard or there are duplicate variant patterns.
+                    // If so, use a sequential if-chain (tag compare per arm) to support guards
+                    // correctly. Otherwise use the faster LLVM switch.
+                    let has_any_guard = arms.iter().any(|a| a.guard.is_some());
+                    let has_duplicate_variants = {
+                        let mut seen = std::collections::HashSet::new();
+                        arms.iter().any(|a| {
+                            if let Pattern::EnumVariant { variant, .. } = &a.pattern {
+                                !seen.insert(variant.clone())
+                            } else {
+                                false
+                            }
+                        })
+                    };
+
                     let enum_struct = val.into_struct_value();
                     let tag = self
                         .builder
                         .build_extract_value(enum_struct, 0, "enum_tag")
                         .unwrap()
                         .into_int_value();
-
-                    // Create arm basic blocks upfront
-                    let arm_bbs: Vec<BasicBlock<'ctx>> = (0..arms.len())
-                        .map(|i| {
-                            self.context
-                                .append_basic_block(func, &format!("match_arm_{}", i))
-                        })
-                        .collect();
-                    let default_bb = self.context.append_basic_block(func, "match_default");
-
-                    // Collect switch cases
-                    let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> =
-                        Vec::new();
-                    let mut wildcard_idx: Option<usize> = None;
-                    for (i, arm) in arms.iter().enumerate() {
-                        match &arm.pattern {
-                            Pattern::EnumVariant { variant, .. } => {
-                                if let Some(tags) = self.enum_variant_tags.get(ename) {
-                                    if let Some(&tv) = tags.get(variant) {
-                                        cases.push((
-                                            self.context.i32_type().const_int(tv as u64, false),
-                                            arm_bbs[i],
-                                        ));
-                                    }
-                                }
-                            }
-                            Pattern::Wildcard => {
-                                wildcard_idx = Some(i);
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    // Emit switch (tag → arm block)
-                    let actual_default = wildcard_idx.map(|i| arm_bbs[i]).unwrap_or(default_bb);
-                    self.builder
-                        .build_switch(tag, actual_default, &cases)
-                        .unwrap();
-
-                    // Compile each arm
                     let ename_clone = ename.clone();
-                    for (i, arm) in arms.iter().enumerate() {
-                        self.builder.position_at_end(arm_bbs[i]);
 
-                        // Extract payload binding if needed
-                        if let Pattern::EnumVariant {
-                            variant,
-                            binding: Some(bind_name),
-                            ..
-                        } = &arm.pattern
-                        {
-                            if let Some(variants) = self.enum_defs.get(&ename_clone).cloned() {
-                                if let Some(v) = variants.iter().find(|v| v.name == *variant) {
-                                    if let Some(ref payload_ty) = v.ty {
-                                        let enum_alloca = self.build_alloca(
-                                            &format!("match_enum_{}", i),
-                                            &Ty::Enum(ename_clone.clone()),
-                                        );
-                                        self.builder.build_store(enum_alloca, val).unwrap();
-                                        let enum_st = self.enum_types[&ename_clone];
-                                        let payload_ptr = self
-                                            .builder
-                                            .build_struct_gep(
-                                                enum_st,
-                                                enum_alloca,
-                                                1,
-                                                "payload_ptr",
-                                            )
-                                            .unwrap();
-                                        let payload_llvm_ty = self.ty_to_basic(payload_ty);
-                                        let payload_val = self
-                                            .builder
-                                            .build_load(payload_llvm_ty, payload_ptr, bind_name)
-                                            .unwrap();
-                                        let bind_alloca = self.build_alloca(bind_name, payload_ty);
-                                        self.builder.build_store(bind_alloca, payload_val).unwrap();
-                                        self.variables.insert(bind_name.clone(), bind_alloca);
-                                        self.var_types
-                                            .insert(bind_name.clone(), payload_ty.clone());
+                    if has_any_guard || has_duplicate_variants {
+                        // ── Sequential if-chain for enum arms with guards ──
+                        let mut remaining_bb =
+                            self.context.append_basic_block(func, "match_else_0");
+                        self.builder
+                            .build_unconditional_branch(remaining_bb)
+                            .unwrap();
+
+                        for (i, arm) in arms.iter().enumerate() {
+                            self.builder.position_at_end(remaining_bb);
+                            let arm_bb = self
+                                .context
+                                .append_basic_block(func, &format!("match_arm_{}", i));
+                            let next_bb = if i + 1 < arms.len() {
+                                self.context
+                                    .append_basic_block(func, &format!("match_else_{}", i + 1))
+                            } else {
+                                merge_bb
+                            };
+
+                            // Pattern check
+                            match &arm.pattern {
+                                Pattern::EnumVariant { variant, .. } => {
+                                    if let Some(tags) = self.enum_variant_tags.get(&ename_clone) {
+                                        if let Some(&tv) = tags.get(variant) {
+                                            let tag_val = self
+                                                .context
+                                                .i32_type()
+                                                .const_int(tv as u64, false);
+                                            let cond = self
+                                                .builder
+                                                .build_int_compare(
+                                                    IntPredicate::EQ,
+                                                    tag,
+                                                    tag_val,
+                                                    "tag_cmp",
+                                                )
+                                                .unwrap();
+                                            self.builder
+                                                .build_conditional_branch(cond, arm_bb, next_bb)
+                                                .unwrap();
+                                        } else {
+                                            self.builder
+                                                .build_unconditional_branch(next_bb)
+                                                .unwrap();
+                                        }
+                                    } else {
+                                        self.builder.build_unconditional_branch(next_bb).unwrap();
+                                    }
+                                }
+                                Pattern::Wildcard | Pattern::Binding(_) => {
+                                    self.builder.build_unconditional_branch(arm_bb).unwrap();
+                                }
+                                _ => {
+                                    self.builder.build_unconditional_branch(next_bb).unwrap();
+                                }
+                            }
+
+                            self.builder.position_at_end(arm_bb);
+
+                            // Extract payload binding if needed
+                            if let Pattern::EnumVariant {
+                                variant,
+                                binding: Some(bind_name),
+                                ..
+                            } = &arm.pattern
+                            {
+                                if let Some(variants) =
+                                    self.enum_defs.get(&ename_clone).cloned()
+                                {
+                                    if let Some(v) =
+                                        variants.iter().find(|v| v.name == *variant)
+                                    {
+                                        if let Some(ref payload_ty) = v.ty {
+                                            let enum_alloca = self.build_alloca(
+                                                &format!("match_enum_{}", i),
+                                                &Ty::Enum(ename_clone.clone()),
+                                            );
+                                            self.builder.build_store(enum_alloca, val).unwrap();
+                                            let enum_st = self.enum_types[&ename_clone];
+                                            let payload_ptr = self
+                                                .builder
+                                                .build_struct_gep(
+                                                    enum_st,
+                                                    enum_alloca,
+                                                    1,
+                                                    "payload_ptr",
+                                                )
+                                                .unwrap();
+                                            let payload_llvm_ty = self.ty_to_basic(payload_ty);
+                                            let payload_val = self
+                                                .builder
+                                                .build_load(
+                                                    payload_llvm_ty,
+                                                    payload_ptr,
+                                                    bind_name,
+                                                )
+                                                .unwrap();
+                                            let bind_alloca =
+                                                self.build_alloca(bind_name, payload_ty);
+                                            self.builder
+                                                .build_store(bind_alloca, payload_val)
+                                                .unwrap();
+                                            self.variables.insert(bind_name.clone(), bind_alloca);
+                                            self.var_types
+                                                .insert(bind_name.clone(), payload_ty.clone());
+                                        }
                                     }
                                 }
                             }
+
+                            // Guard check: if guard fails, skip to next arm
+                            if let Some(guard_expr) = &arm.guard {
+                                let guard_pass_bb =
+                                    self.context.append_basic_block(func, "guard_pass");
+                                let guard_val =
+                                    self.compile_expr(guard_expr, params).into_int_value();
+                                self.builder
+                                    .build_conditional_branch(guard_val, guard_pass_bb, next_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(guard_pass_bb);
+                            }
+
+                            self.compile_stmts(&arm.body, params);
+                            if self.no_terminator() {
+                                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                            }
+                            remaining_bb = next_bb;
                         }
 
-                        self.compile_stmts(&arm.body, params);
+                        if remaining_bb != merge_bb {
+                            self.builder.position_at_end(remaining_bb);
+                            if self.no_terminator() {
+                                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                            }
+                        }
+                    } else {
+                        // ── Fast path: LLVM switch on tag (no guards, no duplicates) ──
+                        // Create arm basic blocks upfront
+                        let arm_bbs: Vec<BasicBlock<'ctx>> = (0..arms.len())
+                            .map(|i| {
+                                self.context
+                                    .append_basic_block(func, &format!("match_arm_{}", i))
+                            })
+                            .collect();
+                        let default_bb = self.context.append_basic_block(func, "match_default");
+
+                        // Collect switch cases
+                        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> =
+                            Vec::new();
+                        let mut wildcard_idx: Option<usize> = None;
+                        for (i, arm) in arms.iter().enumerate() {
+                            match &arm.pattern {
+                                Pattern::EnumVariant { variant, .. } => {
+                                    if let Some(tags) = self.enum_variant_tags.get(&ename_clone) {
+                                        if let Some(&tv) = tags.get(variant) {
+                                            cases.push((
+                                                self.context
+                                                    .i32_type()
+                                                    .const_int(tv as u64, false),
+                                                arm_bbs[i],
+                                            ));
+                                        }
+                                    }
+                                }
+                                Pattern::Wildcard => {
+                                    wildcard_idx = Some(i);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // Emit switch (tag → arm block)
+                        let actual_default =
+                            wildcard_idx.map(|i| arm_bbs[i]).unwrap_or(default_bb);
+                        self.builder
+                            .build_switch(tag, actual_default, &cases)
+                            .unwrap();
+
+                        // Compile each arm
+                        for (i, arm) in arms.iter().enumerate() {
+                            self.builder.position_at_end(arm_bbs[i]);
+
+                            // Extract payload binding if needed
+                            if let Pattern::EnumVariant {
+                                variant,
+                                binding: Some(bind_name),
+                                ..
+                            } = &arm.pattern
+                            {
+                                if let Some(variants) =
+                                    self.enum_defs.get(&ename_clone).cloned()
+                                {
+                                    if let Some(v) =
+                                        variants.iter().find(|v| v.name == *variant)
+                                    {
+                                        if let Some(ref payload_ty) = v.ty {
+                                            let enum_alloca = self.build_alloca(
+                                                &format!("match_enum_{}", i),
+                                                &Ty::Enum(ename_clone.clone()),
+                                            );
+                                            self.builder.build_store(enum_alloca, val).unwrap();
+                                            let enum_st = self.enum_types[&ename_clone];
+                                            let payload_ptr = self
+                                                .builder
+                                                .build_struct_gep(
+                                                    enum_st,
+                                                    enum_alloca,
+                                                    1,
+                                                    "payload_ptr",
+                                                )
+                                                .unwrap();
+                                            let payload_llvm_ty = self.ty_to_basic(payload_ty);
+                                            let payload_val = self
+                                                .builder
+                                                .build_load(
+                                                    payload_llvm_ty,
+                                                    payload_ptr,
+                                                    bind_name,
+                                                )
+                                                .unwrap();
+                                            let bind_alloca =
+                                                self.build_alloca(bind_name, payload_ty);
+                                            self.builder
+                                                .build_store(bind_alloca, payload_val)
+                                                .unwrap();
+                                            self.variables.insert(bind_name.clone(), bind_alloca);
+                                            self.var_types
+                                                .insert(bind_name.clone(), payload_ty.clone());
+                                        }
+                                    }
+                                }
+                            }
+
+                            self.compile_stmts(&arm.body, params);
+                            if self.no_terminator() {
+                                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                            }
+                        }
+
+                        // Default block → merge (always needs a terminator)
+                        self.builder.position_at_end(default_bb);
                         if self.no_terminator() {
                             self.builder.build_unconditional_branch(merge_bb).unwrap();
                         }
-                    }
-
-                    // Default block → merge (always needs a terminator)
-                    self.builder.position_at_end(default_bb);
-                    if self.no_terminator() {
-                        self.builder.build_unconditional_branch(merge_bb).unwrap();
                     }
 
                     self.builder.position_at_end(merge_bb);
@@ -1032,12 +1200,35 @@ impl<'ctx> Codegen<'ctx> {
                             Pattern::Wildcard => {
                                 self.builder.build_unconditional_branch(arm_bb).unwrap();
                             }
+                            Pattern::Binding(_) => {
+                                self.builder.build_unconditional_branch(arm_bb).unwrap();
+                            }
                             _ => {
                                 self.builder.build_unconditional_branch(next_bb).unwrap();
                             }
                         }
 
                         self.builder.position_at_end(arm_bb);
+
+                        // Store bound value into a named local variable
+                        if let Pattern::Binding(bind_name) = &arm.pattern {
+                            let bind_ty = self.guess_expr_ty(expr, params);
+                            let alloca = self.build_alloca(bind_name, &bind_ty);
+                            self.builder.build_store(alloca, val).unwrap();
+                            self.variables.insert(bind_name.clone(), alloca);
+                            self.var_types.insert(bind_name.clone(), bind_ty);
+                        }
+
+                        // Guard check: if guard fails, skip this arm and go to next_bb
+                        if let Some(guard_expr) = &arm.guard {
+                            let guard_val = self.compile_expr(guard_expr, params).into_int_value();
+                            let guard_pass_bb = self.context.append_basic_block(func, "guard_pass");
+                            self.builder
+                                .build_conditional_branch(guard_val, guard_pass_bb, next_bb)
+                                .unwrap();
+                            self.builder.position_at_end(guard_pass_bb);
+                        }
+
                         self.compile_stmts(&arm.body, params);
                         if self.no_terminator() {
                             self.builder.build_unconditional_branch(merge_bb).unwrap();

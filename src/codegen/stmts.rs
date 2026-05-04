@@ -1247,7 +1247,7 @@ impl<'ctx> Codegen<'ctx> {
                                                 .build_extract_value(struct_val, idx, &format!("fld_{}", field_name))
                                                 .unwrap();
                                             match sub.as_ref() {
-                                                Pattern::EnumVariant { enum_name, variant, binding: Some(bind_name) } => {
+                                                Pattern::EnumVariant { enum_name: _, variant, binding: Some(bind_name) } => {
                                                     if let Ty::Enum(ename) = &field_ty {
                                                         if let Some(variants) = self.enum_defs.get(ename).cloned() {
                                                             if let Some(v) = variants.iter().find(|v| v.name == *variant) {
@@ -1274,7 +1274,6 @@ impl<'ctx> Codegen<'ctx> {
                                                             }
                                                         }
                                                     }
-                                                    let _ = enum_name; // suppress unused warning
                                                 }
                                                 Pattern::EnumVariant { enum_name: _, variant, binding: None } => {
                                                     // Emit a discriminant check: if the field's enum tag doesn't

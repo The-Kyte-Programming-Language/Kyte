@@ -196,6 +196,71 @@ match r {
 
 `n`은 패턴에서 페이로드에 바인딩된 변수입니다. 바인딩 이름은 자유롭게 지을 수 있습니다.
 
+### when 가드
+
+패턴이 일치한 뒤 추가 조건을 `when`으로 걸 수 있습니다:
+
+```kyte
+int score = 85;
+
+match score {
+    n when n >= 90 => { print("A"); }
+    n when n >= 80 => { print("B"); }
+    n              => { print(f"C: {n}"); }
+}
+```
+
+`n`은 **바인딩 패턴**입니다 — 어떤 값이든 매칭하고 그 값을 `n`에 바인딩합니다. 타입은 match 대상(여기서는 `int`)에서 자동 추론됩니다.
+
+`when` 조건이 false면 다음 arm으로 넘어갑니다. 열거형 페이로드에도 씁니다:
+
+```kyte
+match result {
+    Result.Ok(val) when val > 100 => { print("big"); }
+    Result.Ok(val)                => { print(f"ok: {val}"); }
+    Result.Err                    => { print("fail"); }
+}
+```
+
+### 구조체 패턴 구조 분해
+
+match arm에서 구조체 필드를 직접 꺼낼 수 있습니다:
+
+```kyte
+struct Point { int x; int y; }
+
+Point p = Point { x: 3, y: 7 };
+
+match p {
+    Point { x, y } when x > 0 => { print(f"오른쪽: {x}, {y}"); }
+    Point { x, y }             => { print(f"왼쪽: {x}, {y}"); }
+}
+```
+
+필드명만 쓰면 같은 이름의 변수로 바인딩됩니다. 중첩 패턴도 지원합니다:
+
+```kyte
+enum Status { Active, Banned(int) }
+
+struct User {
+    string name;
+    Status status;
+}
+
+match user {
+    User { name, status: Status.Active }       => { print(f"{name}: 활성"); }
+    User { name, status: Status.Banned(code) } => { print(f"{name}: 차단 {code}"); }
+}
+```
+
+| 문법 | 의미 |
+|---|---|
+| `{ x }` | 필드 `x`를 변수 `x`로 바인딩 |
+| `{ x: 42 }` | 필드 `x`가 42인지 매칭 |
+| `{ x: Status.Banned(n) }` | 필드 `x`를 열거형 변형에 매칭, 페이로드를 `n`에 바인딩 |
+
+언급하지 않은 필드는 무시됩니다 — 모든 필드를 나열할 필요 없음.
+
 ---
 
 ## assert

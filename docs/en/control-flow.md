@@ -194,6 +194,71 @@ match r {
 
 `n` is a pattern binding — the payload is extracted and bound to that name. You can name it anything.
 
+### when Guards
+
+Add a condition after a pattern with `when`. The arm only fires if the pattern matches *and* the guard is true:
+
+```kyte
+int score = 85;
+
+match score {
+    n when n >= 90 => { print("A"); }
+    n when n >= 80 => { print("B"); }
+    n              => { print(f"C: {n}"); }
+}
+```
+
+`n` is a **binding pattern** — it matches any value and binds it to `n`. The type is inferred from the match subject.
+
+When the guard is false, matching falls through to the next arm. Works on enum payloads too:
+
+```kyte
+match result {
+    Result.Ok(val) when val > 100 => { print("big"); }
+    Result.Ok(val)                => { print(f"ok: {val}"); }
+    Result.Err                    => { print("fail"); }
+}
+```
+
+### Struct Pattern Destructuring
+
+Pull struct fields out directly in a match arm:
+
+```kyte
+struct Point { int x; int y; }
+
+Point p = Point { x: 3, y: 7 };
+
+match p {
+    Point { x, y } when x > 0 => { print(f"right: {x}, {y}"); }
+    Point { x, y }             => { print(f"left: {x}, {y}"); }
+}
+```
+
+Shorthand `{ x }` binds the field to a variable of the same name. Nested enum patterns are also supported:
+
+```kyte
+enum Status { Active, Banned(int) }
+
+struct User {
+    string name;
+    Status status;
+}
+
+match user {
+    User { name, status: Status.Active }       => { print(f"{name}: active"); }
+    User { name, status: Status.Banned(code) } => { print(f"{name}: banned {code}"); }
+}
+```
+
+| Syntax | Meaning |
+|---|---|
+| `{ x }` | bind field `x` to variable `x` |
+| `{ x: 42 }` | match field `x` == 42 |
+| `{ x: Status.Banned(n) }` | match field `x` against enum variant, bind payload to `n` |
+
+Unlisted fields are ignored — no need to name every field.
+
 ---
 
 ## assert

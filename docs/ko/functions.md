@@ -40,6 +40,37 @@ fn move(int dx, int dy) { }    // 매개변수
 
 ---
 
+## >> 파이프 연산자
+
+값을 함수에 순서대로 넘길 때 `>>`를 씁니다. 왼쪽 값이 오른쪽 함수의 **첫 번째 인수**로 들어갑니다:
+
+```kyte
+fn double(int n) -> int { return n * 2; }
+fn clamp(int n, int lo, int hi) -> int {
+    if n < lo { return lo; }
+    if n > hi { return hi; }
+    return n;
+}
+
+@main(main) {
+    int x = 5;
+    x >> double >> print          // print(double(x)) → 10
+    x >> clamp(0, 8) >> print     // clamp(x, 0, 8) → 5, 그 다음 print
+}
+```
+
+추가 인수가 있으면 `fn_name(arg1, arg2)` 형태로 씁니다 — 파이프된 값이 맨 앞 인수로 자동 삽입됩니다:
+
+| 쓴 코드 | 컴파일되는 코드 |
+|---|---|
+| `data >> print` | `print(data)` |
+| `data >> clamp(0, 10)` | `clamp(data, 0, 10)` |
+| `a >> f(b) >> g(c)` | `g(f(a, b), c)` |
+
+파이프는 **파싱 시점에 Call 노드로 변환**됩니다 — 런타임 오버헤드 없음. 중첩 함수 호출을 안에서 밖으로 읽는 불편함 없이 왼쪽에서 오른쪽으로 흐르는 코드를 쓸 수 있습니다.
+
+---
+
 ## 조기 반환
 
 중간에 `return`으로 바로 나올 수 있습니다. 중첩 조건을 피하는 가장 깔끔한 방법입니다:

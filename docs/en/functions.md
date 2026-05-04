@@ -37,6 +37,37 @@ fn move(int dx, int dy) { }    // parameter
 
 ---
 
+## >> Pipe Operator
+
+Thread a value through a chain of functions with `>>`. The left-hand value becomes the **first argument** of the right-hand function:
+
+```kyte
+fn double(int n) -> int { return n * 2; }
+fn clamp(int n, int lo, int hi) -> int {
+    if n < lo { return lo; }
+    if n > hi { return hi; }
+    return n;
+}
+
+@main(main) {
+    int x = 5;
+    x >> double >> print          // print(double(x)) → 10
+    x >> clamp(0, 8) >> print     // clamp(x, 0, 8) → 5, then print
+}
+```
+
+When the target function takes extra arguments, write them in parentheses — the piped value is inserted first:
+
+| Written | Compiled as |
+|---|---|
+| `data >> print` | `print(data)` |
+| `data >> clamp(0, 10)` | `clamp(data, 0, 10)` |
+| `a >> f(b) >> g(c)` | `g(f(a, b), c)` |
+
+Pipe desugars to a `Call` node at parse time — no runtime overhead. Code reads left to right instead of inside out.
+
+---
+
 ## Early Return
 
 Use `return` to exit at any point. Great for guard clauses — reject bad input upfront and keep the happy path clean:

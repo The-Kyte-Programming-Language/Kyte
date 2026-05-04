@@ -135,6 +135,30 @@ Bob: banned — spam
 
 ---
 
+## Pattern Matching on Structs
+
+Structs can be destructured directly inside a `match` arm:
+
+```kyte
+match point {
+    Point { x, y } when x > 0 => { print(f"right: {x}, {y}"); }
+    Point { x, y }             => { print(f"left: {x}, {y}"); }
+}
+```
+
+You can name only the fields you care about — unlisted fields are ignored:
+
+```kyte
+match user {
+    User { name, status: Status.Active }       => { print(f"active: {name}"); }
+    User { name, status: Status.Banned(code) } => { print(f"banned: {name} ({code})"); }
+}
+```
+
+For full syntax (nested enum sub-patterns, `when` guards) see **Struct Pattern Destructuring** in [Control Flow](control-flow.md).
+
+---
+
 ## Tips
 
 - Payload variants carry **one** value. If you need multiple fields, put them in a struct.

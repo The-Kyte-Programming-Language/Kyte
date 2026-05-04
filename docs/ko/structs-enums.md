@@ -137,6 +137,30 @@ struct User {
 
 ---
 
+## match에서 구조체 구조 분해
+
+struct를 match arm에서 직접 분해할 수 있습니다:
+
+```kyte
+match point {
+    Point { x, y } when x > 0 => { print(f"오른쪽: {x}, {y}"); }
+    Point { x, y }             => { print(f"왼쪽: {x}, {y}"); }
+}
+```
+
+필요한 필드만 꺼낼 수도 있습니다 — 나머지는 무시됩니다:
+
+```kyte
+match user {
+    User { name, status: Status.Active }       => { print(f"활성: {name}"); }
+    User { name, status: Status.Banned(code) } => { print(f"차단: {name} ({code})"); }
+}
+```
+
+전체 문법(중첩 열거형 패턴, `when` 가드 포함)은 [제어 흐름](control-flow.md)의 **구조체 패턴 구조 분해** 섹션을 참고하세요.
+
+---
+
 ## 알아두면 좋은 점
 
 - 페이로드 변형은 값을 **하나**만 담습니다. 여러 필드가 필요하면 struct를 만들어서 담으세요.

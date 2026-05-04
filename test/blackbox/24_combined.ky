@@ -1,0 +1,38 @@
+fn clamp(int n, int lo, int hi) -> int {
+    if n < lo { return lo; }
+    if n > hi { return hi; }
+    return n;
+}
+
+fn double(int n) -> int { return n * 2; }
+
+struct Point {
+    int x;
+    int y;
+}
+
+enum Shape {
+    Circle(int),
+    Square(int),
+}
+
+@main(main) {
+    // pipe + guard
+    int val = 3;
+    val >> double >> clamp(0, 5) >> print
+
+    // struct destructure + guard + binding
+    Point p = Point { x: -1, y: 4 };
+    match p {
+        Point { x, y } when x > 0 => { print(f"right {x}"); }
+        Point { x, y }             => { print(f"left {x}"); }
+    }
+
+    // pipe + match
+    Shape s = Shape.Circle(10);
+    match s {
+        Shape.Circle(r) when r > 5 => { print("big circle"); }
+        Shape.Circle(r)            => { print("small circle"); }
+        Shape.Square(side)         => { print(f"square {side}"); }
+    }
+}

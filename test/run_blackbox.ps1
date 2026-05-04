@@ -40,6 +40,7 @@ $Expected = @{
     "21_pipe.ky"             = "10`n15`n5`n20"
     "22_guard.ky"            = "B`nbig ok"
     "23_destructure.ky"      = "right: 3 7`nalice banned 42`nbob active"
+    "24_combined.ky"         = "5`nleft -1`nbig circle"
 }
 
 # Setup

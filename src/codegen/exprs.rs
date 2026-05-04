@@ -90,6 +90,16 @@ impl<'ctx> Codegen<'ctx> {
                     return self.i64_type().const_int(0, false).into();
                 }
 
+                // print() — builtin (also reachable via >> pipe)
+                if name == "print" {
+                    for a in args {
+                        let val = self.compile_expr(a, params);
+                        let ty = self.guess_expr_ty(a, params);
+                        self.emit_print(val, Some(&ty));
+                    }
+                    return self.i64_type().const_int(0, false).into();
+                }
+
                 // 함수 포인터 변수로 간주 (클로저 호출)
                 if !self.functions.contains_key(name) {
                     if let Some(&fn_ptr_alloca) = self.variables.get(name) {

@@ -241,6 +241,14 @@ impl Analyzer {
                     return Some(Ty::Int);
                 }
 
+                // print() builtin — reachable via >> pipe operator
+                if name == "print" {
+                    for arg in args {
+                        self.infer_expr(arg, scope);
+                    }
+                    return Some(Ty::Int);
+                }
+
                 if let Some(sig) = self.functions.get(name).cloned() {
                     if args.len() != sig.params.len() {
                         self.err(

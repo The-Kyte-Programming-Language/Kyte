@@ -79,7 +79,23 @@
       "Bash(\"C:\\\\llvm\\\\bin\\\\clang.exe\" test/blackbox/11_fstrings.o kyte_rt/kyte_rt.o -o test/blackbox/11_fstrings.exe)",
       "Bash(test/blackbox/11_fstrings.exe)",
       "PowerShell(Get-Process)",
-      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\yeokyoomin\\\\Desktop\\\\kyte\" -Filter \"*README*\" -Force)"
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\yeokyoomin\\\\Desktop\\\\kyte\" -Filter \"*README*\" -Force)",
+      "Bash(dir -R src)",
+      "Bash(git checkout *)",
+      "Bash(./target/release/kyte.exe run *)",
+      "Bash(target/release/kyte.exe --help)",
+      "Bash(target/release/kyte.exe test/blackbox/21_pipe.ky)",
+      "Bash(target/release/kyte.exe test *)",
+      "Bash(Select-String \"error\\\\[\")",
+      "Bash(Select-Object -First 10)",
+      "Read(//mnt/c/Users/yeokyoomin/Desktop/**)",
+      "Bash(./target/release/kyte run *)",
+      "PowerShell(.\\\\target\\\\release\\\\kyte.exe run test/blackbox/21_pipe.ky)",
+      "PowerShell(.\\\\target\\\\release\\\\kyte.exe run \"c:\\\\Users\\\\yeokyoomin\\\\Desktop\\\\kyte\\\\test\\\\blackbox\\\\21_pipe.ky\")",
+      "Bash(grep -A 15 \"'>'\\\\\\\\|Gt\\\\\\\\|PipeOp\")",
+      "Bash(Select-Object -First 5)",
+      "Bash(.\\\\target\\\\release\\\\kyte.exe run *)",
+      "Bash(powershell -ExecutionPolicy Bypass -File test/run_blackbox.ps1)"
     ]
   }
 }

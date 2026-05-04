@@ -1246,34 +1246,66 @@ impl<'ctx> Codegen<'ctx> {
                                             let field_val = self.builder
                                                 .build_extract_value(struct_val, idx, &format!("fld_{}", field_name))
                                                 .unwrap();
-                                            if let Pattern::EnumVariant { enum_name, variant, binding: Some(bind_name) } = sub.as_ref() {
-                                                if let Ty::Enum(ename) = &field_ty {
-                                                    if let Some(variants) = self.enum_defs.get(ename).cloned() {
-                                                        if let Some(v) = variants.iter().find(|v| v.name == *variant) {
-                                                            if let Some(ref payload_ty) = v.ty {
-                                                                // Store field value to alloca so we can GEP into it
-                                                                let field_alloca = self.build_alloca(
-                                                                    &format!("fld_enum_{}", field_name),
-                                                                    &field_ty,
-                                                                );
-                                                                self.builder.build_store(field_alloca, field_val).unwrap();
-                                                                let enum_st = self.enum_types[ename];
-                                                                let payload_ptr = self.builder
-                                                                    .build_struct_gep(enum_st, field_alloca, 1, "payload_ptr")
+                                            match sub.as_ref() {
+                                                Pattern::EnumVariant { enum_name, variant, binding: Some(bind_name) } => {
+                                                    if let Ty::Enum(ename) = &field_ty {
+                                                        if let Some(variants) = self.enum_defs.get(ename).cloned() {
+                                                            if let Some(v) = variants.iter().find(|v| v.name == *variant) {
+                                                                if let Some(ref payload_ty) = v.ty {
+                                                                    // Store field value to alloca so we can GEP into it
+                                                                    let field_alloca = self.build_alloca(
+                                                                        &format!("fld_enum_{}", field_name),
+                                                                        &field_ty,
+                                                                    );
+                                                                    self.builder.build_store(field_alloca, field_val).unwrap();
+                                                                    let enum_st = self.enum_types[ename];
+                                                                    let payload_ptr = self.builder
+                                                                        .build_struct_gep(enum_st, field_alloca, 1, "payload_ptr")
+                                                                        .unwrap();
+                                                                    let payload_llvm_ty = self.ty_to_basic(payload_ty);
+                                                                    let payload_val = self.builder
+                                                                        .build_load(payload_llvm_ty, payload_ptr, bind_name)
+                                                                        .unwrap();
+                                                                    let bind_alloca = self.build_alloca(bind_name, payload_ty);
+                                                                    self.builder.build_store(bind_alloca, payload_val).unwrap();
+                                                                    self.variables.insert(bind_name.clone(), bind_alloca);
+                                                                    self.var_types.insert(bind_name.clone(), payload_ty.clone());
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    let _ = enum_name; // suppress unused warning
+                                                }
+                                                Pattern::EnumVariant { enum_name: _, variant, binding: None } => {
+                                                    // Emit a discriminant check: if the field's enum tag doesn't
+                                                    // match the expected variant, jump to the next arm.
+                                                    if let Ty::Enum(ename) = &field_ty {
+                                                        if let Some(tags) = self.enum_variant_tags.get(ename).cloned() {
+                                                            if let Some(&expected_tag) = tags.get(variant.as_str()) {
+                                                                let enum_struct_val = field_val.into_struct_value();
+                                                                let actual_tag = self.builder
+                                                                    .build_extract_value(enum_struct_val, 0, "disc_tag")
+                                                                    .unwrap()
+                                                                    .into_int_value();
+                                                                let expected = self.context.i32_type().const_int(expected_tag as u64, false);
+                                                                let cond = self.builder
+                                                                    .build_int_compare(
+                                                                        inkwell::IntPredicate::EQ,
+                                                                        actual_tag,
+                                                                        expected,
+                                                                        "disc_cmp",
+                                                                    )
                                                                     .unwrap();
-                                                                let payload_llvm_ty = self.ty_to_basic(payload_ty);
-                                                                let payload_val = self.builder
-                                                                    .build_load(payload_llvm_ty, payload_ptr, bind_name)
+                                                                let disc_ok_bb = self.context.append_basic_block(func, "disc_ok");
+                                                                self.builder
+                                                                    .build_conditional_branch(cond, disc_ok_bb, next_bb)
                                                                     .unwrap();
-                                                                let bind_alloca = self.build_alloca(bind_name, payload_ty);
-                                                                self.builder.build_store(bind_alloca, payload_val).unwrap();
-                                                                self.variables.insert(bind_name.clone(), bind_alloca);
-                                                                self.var_types.insert(bind_name.clone(), payload_ty.clone());
+                                                                self.builder.position_at_end(disc_ok_bb);
                                                             }
                                                         }
                                                     }
                                                 }
-                                                let _ = enum_name; // suppress unused warning
+                                                _ => {}
                                             }
                                         }
                                     }

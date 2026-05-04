@@ -25,7 +25,14 @@ struct User {
     User u = User { name: "alice", age: 25, status: Status.Banned(42) };
 
     match u {
-        User { name, status: Status.Banned(code) } => { print(f"{name} banned {code}"); }
         User { name, status: Status.Active }        => { print(f"{name} active"); }
+        User { name, status: Status.Banned(code) }  => { print(f"{name} banned {code}"); }
+    }
+
+    User u2 = User { name: "bob", age: 30, status: Status.Active };
+
+    match u2 {
+        User { name, status: Status.Active }        => { print(f"{name} active"); }
+        User { name, status: Status.Banned(code) }  => { print(f"{name} banned {code}"); }
     }
 }

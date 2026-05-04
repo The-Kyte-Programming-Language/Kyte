@@ -500,25 +500,39 @@ impl Analyzer {
                                             );
                                         }
                                         Some(sub) => {
-                                            // Nested pattern — extract bindings from sub-pattern
+                                            // Nested pattern — validate variant exists, extract bindings
                                             if let Pattern::EnumVariant {
                                                 enum_name,
                                                 variant,
-                                                binding: Some(bind_name),
+                                                binding,
                                             } = sub.as_ref()
                                             {
                                                 if let Some(variants) = self.enums.get(enum_name) {
                                                     if let Some(v) = variants.iter().find(|v| v.name == *variant) {
-                                                        if let Some(ref payload_ty) = v.ty {
-                                                            arm_scope.insert(
-                                                                bind_name.clone(),
-                                                                VarInfo {
-                                                                    ty: payload_ty.clone(),
-                                                                    is_vault: false,
-                                                                },
-                                                            );
+                                                        if let Some(bind_name) = binding {
+                                                            if let Some(ref payload_ty) = v.ty {
+                                                                arm_scope.insert(
+                                                                    bind_name.clone(),
+                                                                    VarInfo {
+                                                                        ty: payload_ty.clone(),
+                                                                        is_vault: false,
+                                                                    },
+                                                                );
+                                                            }
                                                         }
+                                                    } else {
+                                                        self.err(
+                                                            "E042",
+                                                            format!("Enum '{}' has no variant '{}'", enum_name, variant),
+                                                            format!("Available: {}", variants.iter().map(|v| v.name.as_str()).collect::<Vec<_>>().join(", ")),
+                                                        );
                                                     }
+                                                } else {
+                                                    self.err(
+                                                        "E043",
+                                                        format!("Unknown enum type '{}' in sub-pattern", enum_name),
+                                                        format!("Declare 'enum {} {{ ... }}' before using it", enum_name),
+                                                    );
                                                 }
                                             }
                                         }

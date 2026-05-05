@@ -1,0 +1,5 @@
+import std.{io, collections.Vec};
+
+@main(main) {
+    print("grouped std ok");
+}

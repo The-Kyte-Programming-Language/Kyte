@@ -102,7 +102,9 @@ pub(super) fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &
     for line in text.lines() {
         for expanded in expand_import_line(line) {
             if let Some(rel) = parse_import_path(&expanded) {
-                visit_import_file(&base_dir.join(rel), seen, out);
+                let dep = resolve_std_path(&rel)
+                    .unwrap_or_else(|| base_dir.join(&rel));
+                visit_import_file(&dep, seen, out);
             }
         }
     }
@@ -112,6 +114,52 @@ pub(super) fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &
         resolved.display()
     ));
     append_non_import_lines(&text, out);
+}
+
+/// Returns the filesystem path to a std module file, or None if the import is not a std.* path
+/// or the file doesn't exist.
+///
+/// Mirrors the logic in `src/main/imports.rs` — kept in sync manually.
+pub(super) fn resolve_std_path(import_path: &str) -> Option<PathBuf> {
+    if !import_path.starts_with("std.") && import_path != "std" {
+        return None;
+    }
+    let rel_parts: Vec<&str> = import_path.split('.').collect();
+    let mut rel = PathBuf::new();
+    for part in &rel_parts {
+        rel.push(part);
+    }
+    rel.set_extension("ky");
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join(&rel);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            if let Some(parent) = exe_dir.parent() {
+                let candidate = parent.join(&rel);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+                if let Some(grandparent) = parent.parent() {
+                    let candidate = grandparent.join(&rel);
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join(&rel);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 pub(super) fn parse_import_path(line: &str) -> Option<String> {
@@ -171,7 +219,9 @@ pub(super) fn preprocess_source_with_imports(uri: &Uri, text: &str) -> (String, 
     for line in text.lines() {
         for expanded in expand_import_line(line) {
             if let Some(rel) = parse_import_path(&expanded) {
-                visit_import_file(&base_dir.join(rel), &mut seen, &mut merged);
+                let dep = resolve_std_path(&rel)
+                    .unwrap_or_else(|| base_dir.join(&rel));
+                visit_import_file(&dep, &mut seen, &mut merged);
             }
         }
     }

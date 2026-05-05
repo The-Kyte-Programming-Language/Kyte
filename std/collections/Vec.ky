@@ -1,0 +1,1 @@
+fn _std_vec_placeholder() -> int { return 0; }

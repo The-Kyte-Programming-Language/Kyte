@@ -1,0 +1,1 @@
+fn _std_io_placeholder() -> int { return 0; }

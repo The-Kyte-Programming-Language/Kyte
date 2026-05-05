@@ -1,0 +1,5 @@
+import std.io;
+
+@main(main) {
+    print("std import ok");
+}

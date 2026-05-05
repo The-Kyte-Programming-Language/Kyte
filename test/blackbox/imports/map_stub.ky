@@ -1,0 +1,3 @@
+fn map_stub_works() -> int {
+    return 2;
+}

@@ -1,0 +1,3 @@
+fn vec_stub_works() -> int {
+    return 1;
+}

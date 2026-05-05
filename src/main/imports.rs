@@ -4,6 +4,33 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Expands `import a.b.{X, Y, Z};` into `["import a.b.X;", "import a.b.Y;", "import a.b.Z;"]`.
+/// Passes non-grouped and non-import lines through unchanged as a single-element vec.
+pub(super) fn expand_import_line(line: &str) -> Vec<String> {
+    let t = line.trim();
+    if !t.starts_with("import") {
+        return vec![line.to_string()];
+    }
+    let rest = t["import".len()..].trim_start();
+    if let Some(brace_start) = rest.find('{') {
+        let prefix = rest[..brace_start].trim_end_matches(|c: char| c == '.' || c == ' ');
+        let inner = rest[brace_start + 1..]
+            .trim_end_matches(';')
+            .trim_end_matches('}');
+        return inner
+            .split(',')
+            .map(|item| {
+                if prefix.is_empty() {
+                    format!("import {};", item.trim())
+                } else {
+                    format!("import {}.{};", prefix, item.trim())
+                }
+            })
+            .collect();
+    }
+    vec![line.to_string()]
+}
+
 pub(super) fn parse_import_path(line: &str) -> Option<String> {
     let t = line.trim();
     if !t.starts_with("import") {
@@ -35,18 +62,22 @@ pub(super) fn load_source_with_imports(entry: &str) -> Result<String, String> {
             .map_err(|e| format!("{} ({})", canonical.display(), e))?;
         let base_dir = canonical.parent().unwrap_or_else(|| Path::new("."));
 
-        for line in text.lines() {
-            if let Some(rel) = parse_import_path(line) {
-                let dep = base_dir.join(rel);
-                visit(&dep, seen, out)?;
+        for raw_line in text.lines() {
+            for line in expand_import_line(raw_line) {
+                if let Some(rel) = parse_import_path(&line) {
+                    let dep = base_dir.join(rel);
+                    visit(&dep, seen, out)?;
+                }
             }
         }
 
         out.push_str(&format!("\n// ---- file: {} ----\n", canonical.display()));
-        for line in text.lines() {
-            if parse_import_path(line).is_none() {
-                out.push_str(line);
-                out.push('\n');
+        for raw_line in text.lines() {
+            for line in expand_import_line(raw_line) {
+                if parse_import_path(&line).is_none() {
+                    out.push_str(&line);
+                    out.push('\n');
+                }
             }
         }
         Ok(())
@@ -105,7 +136,8 @@ fn build_import_graph(entry: &str) -> Result<ImportGraph, String> {
         // Recurse into dependencies first (post-order = dependencies before dependents).
         let imports: Vec<PathBuf> = text
             .lines()
-            .filter_map(|l| parse_import_path(l))
+            .flat_map(|l| expand_import_line(l))
+            .filter_map(|l| parse_import_path(&l))
             .map(|rel| base_dir.join(rel))
             .collect();
 
@@ -190,10 +222,12 @@ pub(super) fn load_source_parallel(entry: &str) -> Result<String, String> {
             .unwrap_or("");
 
         merged.push_str(&format!("\n// ---- file: {} ----\n", canonical.display()));
-        for line in text.lines() {
-            if parse_import_path(line).is_none() {
-                merged.push_str(line);
-                merged.push('\n');
+        for raw_line in text.lines() {
+            for line in expand_import_line(raw_line) {
+                if parse_import_path(&line).is_none() {
+                    merged.push_str(&line);
+                    merged.push('\n');
+                }
             }
         }
     }
@@ -207,4 +241,34 @@ pub(super) fn count_source_files(entry: &str) -> usize {
     build_import_graph(entry)
         .map(|g| g.order.len())
         .unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grouped_import_expands() {
+        let line = "import std.collections.{Vec, Map, Pool};";
+        let expanded = expand_import_line(line);
+        assert_eq!(expanded, vec![
+            "import std.collections.Vec;".to_string(),
+            "import std.collections.Map;".to_string(),
+            "import std.collections.Pool;".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn single_import_unchanged() {
+        let line = "import std.io;";
+        let expanded = expand_import_line(line);
+        assert_eq!(expanded, vec!["import std.io;".to_string()]);
+    }
+
+    #[test]
+    fn non_import_unchanged() {
+        let line = "int x = 5;";
+        let expanded = expand_import_line(line);
+        assert_eq!(expanded, vec!["int x = 5;".to_string()]);
+    }
 }

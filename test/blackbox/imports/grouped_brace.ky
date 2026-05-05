@@ -1,0 +1,8 @@
+import {vec_stub.ky, map_stub.ky, pool_stub.ky};
+
+@main(main) {
+    int a = vec_stub_works();
+    int b = map_stub_works();
+    int c = pool_stub_works();
+    print(a + b + c);
+}

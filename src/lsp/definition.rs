@@ -3,7 +3,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use lsp_types::{GotoDefinitionResponse, Location, Position, Range, Uri};
 
-use super::imports::{parse_import_path, preprocess_source, uri_to_file_path};
+use super::imports::{expand_import_line, parse_import_path, preprocess_source, uri_to_file_path};
 use super::util::word_at;
 use crate::ast::TopLevel;
 use crate::lexer::Lexer;
@@ -178,38 +178,40 @@ fn find_in_imports(text: &str, uri: &Uri, word: &str) -> Option<Location> {
     let root_path = uri_to_file_path(uri)?;
     let base_dir = root_path.parent()?;
 
-    for line in text.lines() {
-        if let Some(rel) = parse_import_path(line) {
-            let import_path = base_dir.join(&rel);
-            let import_src = fs::read_to_string(&import_path).ok()?;
-            let import_lines: Vec<&str> = import_src.lines().collect();
-            let preprocessed = super::imports::preprocess_source(&import_src);
+    for raw_line in text.lines() {
+        for line in expand_import_line(raw_line) {
+            if let Some(rel) = parse_import_path(&line) {
+                let import_path = base_dir.join(&rel);
+                let import_src = fs::read_to_string(&import_path).ok()?;
+                let import_lines: Vec<&str> = import_src.lines().collect();
+                let preprocessed = super::imports::preprocess_source(&import_src);
 
-            let r = catch_unwind(AssertUnwindSafe(|| -> Option<Location> {
-                let tokens = Lexer::new(&preprocessed).tokenize();
-                let ast = Parser::new(tokens).parse();
-                let import_uri: Uri = format!(
-                    "file:///{}",
-                    import_path.to_string_lossy().replace('\\', "/")
-                )
-                .parse()
-                .ok()?;
+                let r = catch_unwind(AssertUnwindSafe(|| -> Option<Location> {
+                    let tokens = Lexer::new(&preprocessed).tokenize();
+                    let ast = Parser::new(tokens).parse();
+                    let import_uri: Uri = format!(
+                        "file:///{}",
+                        import_path.to_string_lossy().replace('\\', "/")
+                    )
+                    .parse()
+                    .ok()?;
 
-                for (item, span) in &ast.items {
-                    let found = match item {
-                        TopLevel::Function { name, .. } if *name == word => true,
-                        TopLevel::Struct { name, .. } if *name == word => true,
-                        TopLevel::Enum { name, .. } if *name == word => true,
-                        _ => false,
-                    };
-                    if found {
-                        return Some(make_location(&import_uri, &import_lines, span.line, word));
+                    for (item, span) in &ast.items {
+                        let found = match item {
+                            TopLevel::Function { name, .. } if *name == word => true,
+                            TopLevel::Struct { name, .. } if *name == word => true,
+                            TopLevel::Enum { name, .. } if *name == word => true,
+                            _ => false,
+                        };
+                        if found {
+                            return Some(make_location(&import_uri, &import_lines, span.line, word));
+                        }
                     }
+                    None
+                }));
+                if let Ok(Some(loc)) = r {
+                    return Some(loc);
                 }
-                None
-            }));
-            if let Ok(Some(loc)) = r {
-                return Some(loc);
             }
         }
     }

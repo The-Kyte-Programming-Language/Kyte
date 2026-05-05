@@ -7,7 +7,7 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, InsertTextFormat, Position, Uri,
 };
 
-use super::imports::{parse_import_path, preprocess_source, uri_to_file_path};
+use super::imports::{expand_import_line, parse_import_path, preprocess_source, uri_to_file_path};
 use super::util::ty_str;
 use crate::ast::TopLevel;
 use crate::lexer::Lexer;
@@ -58,18 +58,20 @@ pub(super) fn compute_completions(uri: &Uri, text: Option<&str>, pos: Position) 
         } else {
             seen.insert(root_path.clone());
         }
-        for line in src_text.lines() {
-            if let Some(rel) = parse_import_path(line) {
-                let path = base_dir.join(&rel);
-                let resolved = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-                if seen.insert(resolved.clone()) {
-                    if let Ok(isrc) =
-                        fs::read_to_string(&resolved).or_else(|_| fs::read_to_string(&path))
-                    {
-                        if let Ok(more) = catch_unwind(AssertUnwindSafe(|| {
-                            extract_decl_completions_labeled(&isrc, &rel)
-                        })) {
-                            items.extend(more);
+        for raw_line in src_text.lines() {
+            for line in expand_import_line(raw_line) {
+                if let Some(rel) = parse_import_path(&line) {
+                    let path = base_dir.join(&rel);
+                    let resolved = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                    if seen.insert(resolved.clone()) {
+                        if let Ok(isrc) =
+                            fs::read_to_string(&resolved).or_else(|_| fs::read_to_string(&path))
+                        {
+                            if let Ok(more) = catch_unwind(AssertUnwindSafe(|| {
+                                extract_decl_completions_labeled(&isrc, &rel)
+                            })) {
+                                items.extend(more);
+                            }
                         }
                     }
                 }

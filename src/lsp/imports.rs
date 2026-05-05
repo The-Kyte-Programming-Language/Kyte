@@ -120,16 +120,22 @@ pub(super) fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &
 /// or the file doesn't exist.
 ///
 /// Mirrors the logic in `src/main/imports.rs` — kept in sync manually.
+// NOTE: This function is duplicated from src/main/imports.rs.
+// Keep the two copies in sync. Future refactor: move to a shared crate-level module.
 pub(super) fn resolve_std_path(import_path: &str) -> Option<PathBuf> {
-    if !import_path.starts_with("std.") && import_path != "std" {
+    if !import_path.starts_with("std.") {
         return None;
     }
-    let rel_parts: Vec<&str> = import_path.split('.').collect();
-    let mut rel = PathBuf::new();
-    for part in &rel_parts {
-        rel.push(part);
-    }
+    let mut rel: PathBuf = import_path.split('.').collect();
     rel.set_extension("ky");
+
+    // Allow operator override via environment variable
+    if let Ok(std_dir) = std::env::var("KYTE_STD_PATH") {
+        let candidate = PathBuf::from(&std_dir).join(&rel);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {

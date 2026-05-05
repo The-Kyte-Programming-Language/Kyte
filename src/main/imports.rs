@@ -56,17 +56,23 @@ pub(super) fn expand_import_line(line: &str) -> Vec<String> {
 /// Looks up the file relative to:
 ///   1. The directory of the running kyte executable (for installed builds)
 ///   2. The current working directory (for dev builds / cargo run)
+// NOTE: This function is duplicated in src/lsp/imports.rs.
+// Keep the two copies in sync. Future refactor: move to a shared crate-level module.
 pub(super) fn resolve_std_path(import_path: &str) -> Option<PathBuf> {
-    if !import_path.starts_with("std.") && import_path != "std" {
+    if !import_path.starts_with("std.") {
         return None;
     }
     // Convert "std.collections.Vec" → "std/collections/Vec.ky"
-    let rel_parts: Vec<&str> = import_path.split('.').collect();
-    let mut rel = PathBuf::new();
-    for part in &rel_parts {
-        rel.push(part);
-    }
+    let mut rel: PathBuf = import_path.split('.').collect();
     rel.set_extension("ky");
+
+    // Allow operator override via environment variable
+    if let Ok(std_dir) = std::env::var("KYTE_STD_PATH") {
+        let candidate = PathBuf::from(&std_dir).join(&rel);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
 
     // Try: directory of the kyte executable
     if let Ok(exe) = std::env::current_exe() {
@@ -375,8 +381,10 @@ mod tests {
 
     #[test]
     fn std_path_resolves() {
+        // This test requires `std/io.ky` to exist at the project root (CWD during `cargo test`).
+        // If running from a non-standard directory, this test may fail.
         let result = resolve_std_path("std.io");
-        assert!(result.is_some(), "expected std.io to resolve to Some(path), but got None");
+        assert!(result.is_some(), "expected std.io to resolve to Some(path), but got None — ensure std/io.ky exists at the project root");
     }
 
     #[test]

@@ -11,19 +11,37 @@ pub(super) fn expand_import_line(line: &str) -> Vec<String> {
     if !t.starts_with("import") {
         return vec![line.to_string()];
     }
-    let rest = t["import".len()..].trim_start();
+    // Fix 2: word boundary — "importfoo" must not match
+    let after_kw = &t["import".len()..];
+    if !after_kw.starts_with(|c: char| c.is_whitespace() || c == '{') {
+        return vec![line.to_string()];
+    }
+    let rest = after_kw.trim_start();
+    // Fix 3: quoted paths containing '{' must not be treated as grouped imports
+    if rest.starts_with('"') {
+        return vec![line.to_string()];
+    }
     if let Some(brace_start) = rest.find('{') {
         let prefix = rest[..brace_start].trim_end_matches(|c: char| c == '.' || c == ' ');
         let inner = rest[brace_start + 1..]
             .trim_end_matches(';')
             .trim_end_matches('}');
-        return inner
+        // Fix 1: filter empty items (empty brace group, trailing commas)
+        let items: Vec<&str> = inner
             .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if items.is_empty() {
+            return vec![];
+        }
+        return items
+            .iter()
             .map(|item| {
                 if prefix.is_empty() {
-                    format!("import {};", item.trim())
+                    format!("import {};", item)
                 } else {
-                    format!("import {}.{};", prefix, item.trim())
+                    format!("import {}.{};", prefix, item)
                 }
             })
             .collect();
@@ -270,5 +288,33 @@ mod tests {
         let line = "int x = 5;";
         let expanded = expand_import_line(line);
         assert_eq!(expanded, vec!["int x = 5;".to_string()]);
+    }
+
+    #[test]
+    fn empty_brace_group_produces_no_imports() {
+        let line = "import std.{};";
+        let expanded = expand_import_line(line);
+        assert_eq!(expanded, Vec::<String>::new());
+    }
+
+    #[test]
+    fn trailing_comma_ignored() {
+        let line = "import std.{Vec,};";
+        let expanded = expand_import_line(line);
+        assert_eq!(expanded, vec!["import std.Vec;".to_string()]);
+    }
+
+    #[test]
+    fn word_boundary_respected() {
+        let line = "importfoo { x };";
+        let expanded = expand_import_line(line);
+        assert_eq!(expanded, vec!["importfoo { x };".to_string()]);
+    }
+
+    #[test]
+    fn quoted_path_with_brace_unchanged() {
+        let line = r#"import "path{v}/file.ky";"#;
+        let expanded = expand_import_line(line);
+        assert_eq!(expanded, vec![r#"import "path{v}/file.ky";"#.to_string()]);
     }
 }

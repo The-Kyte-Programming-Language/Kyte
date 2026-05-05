@@ -4,6 +4,51 @@ use std::path::{Path, PathBuf};
 
 use lsp_types::Uri;
 
+/// Expands `import a.b.{X, Y, Z};` into individual import lines.
+/// Mirrors the logic in `src/main/imports.rs` (kept in sync manually).
+pub(super) fn expand_import_line(line: &str) -> Vec<String> {
+    let t = line.trim();
+    if !t.starts_with("import") {
+        return vec![line.to_string()];
+    }
+    // Word boundary: "importfoo" must not match.
+    let after_kw = &t["import".len()..];
+    if !after_kw.starts_with(|c: char| c.is_whitespace() || c == '{') {
+        return vec![line.to_string()];
+    }
+    let rest = after_kw.trim_start();
+    // Quoted paths containing '{' must not be treated as grouped imports.
+    if rest.starts_with('"') {
+        return vec![line.to_string()];
+    }
+    if let Some(brace_start) = rest.find('{') {
+        let prefix = rest[..brace_start].trim_end_matches(|c: char| c == '.' || c == ' ');
+        let inner = rest[brace_start + 1..]
+            .trim_end_matches(';')
+            .trim_end_matches('}');
+        // Filter empty items (empty brace group, trailing commas).
+        let items: Vec<&str> = inner
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if items.is_empty() {
+            return vec![];
+        }
+        return items
+            .iter()
+            .map(|item| {
+                if prefix.is_empty() {
+                    format!("import {};", item)
+                } else {
+                    format!("import {}.{};", prefix, item)
+                }
+            })
+            .collect();
+    }
+    vec![line.to_string()]
+}
+
 pub(super) fn is_import_line(line: &str) -> bool {
     parse_import_path(line).is_some()
 }
@@ -11,11 +56,13 @@ pub(super) fn is_import_line(line: &str) -> bool {
 pub(super) fn preprocess_source(src: &str) -> String {
     let mut out = String::new();
     for line in src.lines() {
-        if is_import_line(line) {
-            out.push('\n');
-        } else {
-            out.push_str(line);
-            out.push('\n');
+        for expanded in expand_import_line(line) {
+            if is_import_line(&expanded) {
+                out.push('\n');
+            } else {
+                out.push_str(&expanded);
+                out.push('\n');
+            }
         }
     }
     out
@@ -23,11 +70,13 @@ pub(super) fn preprocess_source(src: &str) -> String {
 
 pub(super) fn append_non_import_lines(src: &str, out: &mut String) {
     for line in src.lines() {
-        if is_import_line(line) {
-            out.push('\n');
-        } else {
-            out.push_str(line);
-            out.push('\n');
+        for expanded in expand_import_line(line) {
+            if is_import_line(&expanded) {
+                out.push('\n');
+            } else {
+                out.push_str(&expanded);
+                out.push('\n');
+            }
         }
     }
 }
@@ -51,8 +100,10 @@ pub(super) fn visit_import_file(path: &Path, seen: &mut HashSet<PathBuf>, out: &
         .unwrap_or_else(|| Path::new("."));
 
     for line in text.lines() {
-        if let Some(rel) = parse_import_path(line) {
-            visit_import_file(&base_dir.join(rel), seen, out);
+        for expanded in expand_import_line(line) {
+            if let Some(rel) = parse_import_path(&expanded) {
+                visit_import_file(&base_dir.join(rel), seen, out);
+            }
         }
     }
 
@@ -118,8 +169,10 @@ pub(super) fn preprocess_source_with_imports(uri: &Uri, text: &str) -> (String, 
     // import 파일을 먼저 — 현재 파일보다 앞에 붙여야
     // analyzer가 함수 선언을 사용 전에 볼 수 있음
     for line in text.lines() {
-        if let Some(rel) = parse_import_path(line) {
-            visit_import_file(&base_dir.join(rel), &mut seen, &mut merged);
+        for expanded in expand_import_line(line) {
+            if let Some(rel) = parse_import_path(&expanded) {
+                visit_import_file(&base_dir.join(rel), &mut seen, &mut merged);
+            }
         }
     }
 

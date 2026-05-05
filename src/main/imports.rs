@@ -375,16 +375,8 @@ mod tests {
 
     #[test]
     fn std_path_resolves() {
-        // "std.io" should map to some file ending in std/io.ky
-        // Only works if std/io.ky exists — create a placeholder for the test
-        // For now just test that the function doesn't return None for std paths
-        // when the std directory exists
-        let _result = resolve_std_path("std.io");
-        // We can only assert it returns Some if std/io.ky exists.
-        // So create the file first in the test, or just test the path computation.
-        // SIMPLEST: test that non-std paths return None
-        let non_std = resolve_std_path("mylib.foo");
-        assert!(non_std.is_none());
+        let result = resolve_std_path("std.io");
+        assert!(result.is_some(), "expected std.io to resolve to Some(path), but got None");
     }
 
     #[test]

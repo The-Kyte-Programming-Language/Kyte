@@ -7,7 +7,7 @@ use crate::parser::Parser;
 pub(super) fn parse_fstring_parts(
     raw: &str,
     errors: &mut Vec<CompileError>,
-    line: usize,
+    _line: usize,
 ) -> Vec<FStringPart> {
     let mut parts = Vec::new();
     let mut chars = raw.chars().peekable();

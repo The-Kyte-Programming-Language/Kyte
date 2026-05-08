@@ -562,7 +562,7 @@ fn run_test(label: &str, source: &str) -> (usize, usize, usize, bool, bool) {
     let tokens = lex.tokenize();
 
     let parse_result = catch_unwind(AssertUnwindSafe(|| {
-        let mut par = Parser::new(tokens);
+        let mut par = Parser::new(tokens, source);
         let program = par.parse();
         (program, par.errors)
     }));
@@ -782,7 +782,7 @@ fn run_test(label: &str, source: &str) -> (usize, usize, usize, bool, bool) {
     if fail_count > 0 && has_any_error {
         if has_parse {
             for e in &parse_errors {
-                println!("    {C_RED}parse error:{C_RESET} {}", e);
+                eprint!("{}", e);
             }
         }
         for e in errors.iter().filter(|e| e.severity == Severity::Error) {

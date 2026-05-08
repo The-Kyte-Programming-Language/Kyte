@@ -1,3 +1,4 @@
+use crate::analyzer::CompileError;
 use crate::ast::*;
 
 #[path = "parser/anchor.rs"]
@@ -23,14 +24,15 @@ pub struct Parser {
     cols: Vec<usize>,
     lens: Vec<usize>,
     pos: usize,
-    pub errors: Vec<String>,
+    pub errors: Vec<CompileError>,
+    source_lines: Vec<String>,
     depth: usize,
     no_struct_init: bool,
     enum_names: std::collections::HashSet<String>,
 }
 
 impl Parser {
-    pub fn new(spanned_tokens: Vec<(Token, usize, usize, usize)>) -> Self {
+    pub fn new(spanned_tokens: Vec<(Token, usize, usize, usize)>, source: &str) -> Self {
         let mut tokens = Vec::with_capacity(spanned_tokens.len());
         let mut lines = Vec::with_capacity(spanned_tokens.len());
         let mut cols = Vec::with_capacity(spanned_tokens.len());
@@ -48,6 +50,7 @@ impl Parser {
             lens,
             pos: 0,
             errors: Vec::new(),
+            source_lines: source.lines().map(|l| l.to_string()).collect(),
             depth: 0,
             no_struct_init: false,
             enum_names: std::collections::HashSet::new(),
@@ -100,12 +103,12 @@ impl Parser {
                 }
                 Token::Extern => items.push(self.parse_extern_fn()),
                 t => {
-                    self.errors.push(format!(
-                        "Unexpected top-level token: {:?} at line {}:{}",
-                        t,
-                        self.current_line(),
-                        self.current_col()
-                    ));
+                    let e = self.make_error(
+                        "P000",
+                        format!("Unexpected token '{}' at top level", util::token_name(t)),
+                        "Only functions, structs, enums, anchors, imports, and const declarations are allowed at the top level".to_string(),
+                    );
+                    self.errors.push(e);
                     self.advance(); // 에러 복구: 스킵
                 }
             }

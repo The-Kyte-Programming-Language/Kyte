@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::parser::Parser;
 
 use super::fstring::parse_fstring_parts;
+use super::util::token_name;
 
 const MAX_DEPTH: usize = 256;
 
@@ -10,12 +11,13 @@ impl Parser {
     pub(super) fn parse_expr(&mut self) -> Expr {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
-            self.errors.push(format!(
-                "Expression nesting too deep (>{}) at line {}:{}",
-                MAX_DEPTH,
-                self.current_line(),
-                self.current_col()
-            ));
+            let e = self.make_error(
+                "P005",
+                format!("Expression is nested too deeply (limit: {})", MAX_DEPTH),
+                "Simplify deeply nested expressions by breaking them into smaller parts"
+                    .to_string(),
+            );
+            self.errors.push(e);
             self.depth -= 1;
             return Expr::IntLit(0);
         }
@@ -292,12 +294,12 @@ impl Parser {
                 Expr::FStringLit(parts)
             }
             t => {
-                self.errors.push(format!(
-                    "Unexpected token in expression: {:?} at line {}:{}",
-                    t,
-                    self.current_line(),
-                    self.current_col()
-                ));
+                let e = self.make_error(
+                    "P006",
+                    format!("Unexpected {} in expression", token_name(&t)),
+                    "Remove this token or replace it with a valid expression (a value, variable, or operation)".to_string(),
+                );
+                self.errors.push(e);
                 self.advance();
                 Expr::IntLit(0) // fallback
             }

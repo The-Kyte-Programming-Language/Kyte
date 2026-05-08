@@ -21,7 +21,7 @@ pub(super) fn compute_definition(
     let r = catch_unwind(AssertUnwindSafe(|| -> Option<Location> {
         let mut lex = Lexer::new(&src);
         let tokens = lex.tokenize();
-        let mut par = Parser::new(tokens);
+        let mut par = Parser::new(tokens, &src);
         let ast = par.parse();
 
         for (item, span) in &ast.items {
@@ -188,7 +188,7 @@ fn find_in_imports(text: &str, uri: &Uri, word: &str) -> Option<Location> {
 
                 let r = catch_unwind(AssertUnwindSafe(|| -> Option<Location> {
                     let tokens = Lexer::new(&preprocessed).tokenize();
-                    let ast = Parser::new(tokens).parse();
+                    let ast = Parser::new(tokens, &preprocessed).parse();
                     let import_uri: Uri = format!(
                         "file:///{}",
                         import_path.to_string_lossy().replace('\\', "/")

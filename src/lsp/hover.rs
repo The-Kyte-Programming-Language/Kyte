@@ -84,7 +84,7 @@ fn member_hover(text: &str, base: &str, member: &str) -> Option<String> {
     let src = preprocess_source(text);
     catch_unwind(AssertUnwindSafe(|| -> Option<String> {
         let tokens = Lexer::new(&src).tokenize();
-        let ast = Parser::new(tokens).parse();
+        let ast = Parser::new(tokens, &src).parse();
 
         // base가 enum 이름인지 확인 → 해당 variant 설명
         for (item, _) in &ast.items {
@@ -133,7 +133,7 @@ fn symbol_hover(text: &str, word: &str, pos: Position) -> Option<String> {
     let src = preprocess_source(text);
     let r = catch_unwind(AssertUnwindSafe(|| -> Option<String> {
         let tokens = Lexer::new(&src).tokenize();
-        let mut par = Parser::new(tokens);
+        let mut par = Parser::new(tokens, &src);
         let ast = par.parse();
 
         for (item, span) in &ast.items {

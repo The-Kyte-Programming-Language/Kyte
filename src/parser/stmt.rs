@@ -77,11 +77,12 @@ impl Parser {
                     value,
                 };
             }
-            self.errors.push(format!(
-                "Invalid compound assignment target at line {}:{}",
-                self.current_line(),
-                self.current_col()
-            ));
+            let e = self.make_error(
+                "P008",
+                "Invalid compound assignment target".to_string(),
+                "Compound assignment (+=, -=, etc.) requires a simple variable name on the left".to_string(),
+            );
+            self.errors.push(e);
             return Stmt::ExprStmt(Expr::IntLit(0));
         }
 
@@ -101,11 +102,12 @@ impl Parser {
                         value,
                     },
                     _ => {
-                        self.errors.push(format!(
-                            "Invalid index assignment target at line {}:{}",
-                            self.current_line(),
-                            self.current_col()
-                        ));
+                        let e = self.make_error(
+                            "P009",
+                            "Invalid index assignment target".to_string(),
+                            "Only simple array variables can be index-assigned (e.g. arr[i] = val)".to_string(),
+                        );
+                        self.errors.push(e);
                         Stmt::ExprStmt(Expr::IntLit(0))
                     }
                 },
@@ -116,20 +118,22 @@ impl Parser {
                         value,
                     },
                     _ => {
-                        self.errors.push(format!(
-                            "Invalid field assignment target at line {}:{}",
-                            self.current_line(),
-                            self.current_col()
-                        ));
+                        let e = self.make_error(
+                            "P010",
+                            "Invalid field assignment target".to_string(),
+                            "Only simple struct variables can be field-assigned (e.g. obj.field = val)".to_string(),
+                        );
+                        self.errors.push(e);
                         Stmt::ExprStmt(Expr::IntLit(0))
                     }
                 },
                 _ => {
-                    self.errors.push(format!(
-                        "Invalid assignment target at line {}:{}",
-                        self.current_line(),
-                        self.current_col()
-                    ));
+                    let e = self.make_error(
+                        "P011",
+                        "Invalid assignment target".to_string(),
+                        "Only variables, array elements, and struct fields can be assigned to".to_string(),
+                    );
+                    self.errors.push(e);
                     Stmt::ExprStmt(Expr::IntLit(0))
                 }
             };
@@ -351,12 +355,12 @@ impl Parser {
                 self.parse_ident_stmt(name, span)
             }
             t => {
-                self.errors.push(format!(
-                    "Unexpected token in statement: {:?} at line {}:{}",
-                    t,
-                    self.current_line(),
-                    self.current_col()
-                ));
+                let e = self.make_error(
+                    "P012",
+                    format!("Unexpected {} in statement", super::util::token_name(&t)),
+                    "Expected a statement (variable declaration, assignment, expression, or control flow)".to_string(),
+                );
+                self.errors.push(e);
                 // 에러 복구: 세미콜론 또는 닫는 중괄호까지 스킵
                 while !matches!(
                     self.current(),
@@ -452,11 +456,12 @@ impl Parser {
                     self.advance();
                     Pattern::IntLit(-n)
                 } else {
-                    self.errors.push(format!(
-                        "Expected integer after '-' in pattern at line {}:{}",
-                        self.current_line(),
-                        self.current_col()
-                    ));
+                    let e = self.make_error(
+                        "P013",
+                        "Expected an integer literal after '-' in pattern".to_string(),
+                        "Negative patterns must be a literal integer, e.g. -1 or -42".to_string(),
+                    );
+                    self.errors.push(e);
                     Pattern::Wildcard
                 }
             }
@@ -505,11 +510,12 @@ impl Parser {
                 }
             }
             _ => {
-                self.errors.push(format!(
-                    "Expected pattern at line {}:{}",
-                    self.current_line(),
-                    self.current_col()
-                ));
+                let e = self.make_error(
+                    "P014",
+                    "Expected a pattern in match arm".to_string(),
+                    "Valid patterns: literals, identifiers, '_' (wildcard), EnumName.Variant, or StructName { fields }".to_string(),
+                );
+                self.errors.push(e);
                 self.advance();
                 Pattern::Wildcard
             }

@@ -9,7 +9,7 @@ use crate::parser::Parser;
 pub(super) fn compute_document_symbols(text: &str, _uri: &Uri) -> DocumentSymbolResponse {
     let src = preprocess_source(text);
     let tokens = Lexer::new(&src).tokenize();
-    let ast = Parser::new(tokens).parse();
+    let ast = Parser::new(tokens, &src).parse();
     let lines: Vec<&str> = text.lines().collect();
 
     let mut syms: Vec<DocumentSymbol> = Vec::new();

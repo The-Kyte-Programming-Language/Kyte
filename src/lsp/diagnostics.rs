@@ -32,7 +32,7 @@ pub(super) fn analyze_text(uri: &Uri, text: &str) -> Vec<Diagnostic> {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let mut lex = Lexer::new(&src);
         let tokens = lex.tokenize();
-        let mut par = Parser::new(tokens);
+        let mut par = Parser::new(tokens, &src);
         let ast = par.parse();
         Analyzer::analyze(&ast, &src)
     }));

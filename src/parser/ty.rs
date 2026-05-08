@@ -82,12 +82,12 @@ impl Parser {
                 }
             }
             t => {
-                self.errors.push(format!(
-                    "Expected type but got {:?} at line {}:{}",
-                    t,
-                    self.current_line(),
-                    self.current_col()
-                ));
+                let e = self.make_error(
+                    "P016",
+                    format!("Expected a type but found {}", super::util::token_name(&t)),
+                    "Valid types: int, float, string, bool, i8, i16, i32, i64, u8, u16, u32, u64, a struct or enum name, or an array type like int[]".to_string(),
+                );
+                self.errors.push(e);
                 Ty::Int // fallback
             }
         };

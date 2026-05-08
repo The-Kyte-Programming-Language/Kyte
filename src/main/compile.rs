@@ -104,7 +104,7 @@ pub(super) fn compile_source(
 
     // ── Parse ────────────────────────────────────────────────────────────────
     let ast_result = catch_unwind(AssertUnwindSafe(|| {
-        let mut par = Parser::new(tokens);
+        let mut par = Parser::new(tokens, source);
         let program = par.parse();
         (program, par.errors)
     }));
@@ -124,7 +124,7 @@ pub(super) fn compile_source(
 
     if !parse_errors.is_empty() {
         for e in &parse_errors {
-            eprintln!("  parse error: {}", e);
+            eprint!("{}", e);
         }
         println!("  build aborted: {} parse error(s)\n", parse_errors.len());
         return;

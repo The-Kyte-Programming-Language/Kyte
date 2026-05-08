@@ -1,7 +1,71 @@
+use crate::analyzer::{CompileError, Severity};
 use crate::ast::*;
 use crate::parser::Parser;
 
+pub(super) fn token_name(tok: &Token) -> &'static str {
+    match tok {
+        Token::Semicolon => "';'",
+        Token::Colon => "':'",
+        Token::Comma => "','",
+        Token::Dot => "'.'",
+        Token::LParen => "'('",
+        Token::RParen => "')'",
+        Token::LBrace => "'{'",
+        Token::RBrace => "'}'",
+        Token::LBracket => "'['",
+        Token::RBracket => "']'",
+        Token::Eq => "'='",
+        Token::Arrow => "'->'",
+        Token::FatArrow => "'=>'",
+        Token::Function => "'fn'",
+        Token::Return => "'return'",
+        Token::If => "'if'",
+        Token::Else => "'else'",
+        Token::For => "'for'",
+        Token::While => "'while'",
+        Token::Loop => "'loop'",
+        Token::Break => "'break'",
+        Token::Continue => "'continue'",
+        Token::Match => "'match'",
+        Token::Struct => "'struct'",
+        Token::Enum => "'enum'",
+        Token::Import => "'import'",
+        Token::EOF => "end of file",
+        Token::Ident(_) => "identifier",
+        Token::IntLit(_) => "integer literal",
+        Token::FloatLit(_) => "float literal",
+        Token::StringLit(_) => "string literal",
+        Token::FStringLit(_) => "f-string",
+        Token::True => "'true'",
+        Token::False => "'false'",
+        Token::Hash => "'#'",
+        _ => "token",
+    }
+}
+
 impl Parser {
+    pub(super) fn make_error(
+        &self,
+        code: &'static str,
+        message: String,
+        hint: String,
+    ) -> CompileError {
+        let span = self.current_span();
+        let source_line = self
+            .source_lines
+            .get(span.line.saturating_sub(1))
+            .cloned()
+            .unwrap_or_default();
+        CompileError {
+            code,
+            severity: Severity::Error,
+            message,
+            hint,
+            span,
+            source_line,
+        }
+    }
+
     pub(super) fn is_keyword(name: &str) -> bool {
         matches!(
             name,
@@ -53,12 +117,12 @@ impl Parser {
     pub(super) fn eat_var_ident(&mut self) -> String {
         let name = self.eat_ident();
         if Self::is_keyword(&name) {
-            self.errors.push(format!(
-                "Reserved keyword '{}' cannot be used as identifier at line {}:{}",
-                name,
-                self.current_line(),
-                self.current_col()
-            ));
+            let e = self.make_error(
+                "P001",
+                format!("'{}' is a reserved keyword and cannot be used as a name", name),
+                format!("Rename this to something other than '{}'", name),
+            );
+            self.errors.push(e);
         }
         name
     }
@@ -136,11 +200,12 @@ impl Parser {
                         self.advance();
                     }
                     Token::EOF => {
-                        self.errors.push(format!(
-                            "Unclosed decorator arguments at line {}:{}",
-                            self.current_line(),
-                            self.current_col()
-                        ));
+                        let e = self.make_error(
+                            "P002",
+                            "Unclosed decorator arguments — reached end of file".to_string(),
+                            "Add a closing ')' to complete the decorator".to_string(),
+                        );
+                        self.errors.push(e);
                         break;
                     }
                     Token::Comma => {
@@ -200,13 +265,16 @@ impl Parser {
         if self.current() == expected {
             self.advance();
         } else {
-            self.errors.push(format!(
-                "Expected {:?} but got {:?} at line {}:{}",
-                expected,
-                self.current(),
-                self.current_line(),
-                self.current_col()
-            ));
+            let e = self.make_error(
+                "P003",
+                format!(
+                    "Expected {} but found {}",
+                    token_name(expected),
+                    token_name(self.current())
+                ),
+                format!("Add or correct the {} here", token_name(expected)),
+            );
+            self.errors.push(e);
             // 에러 복구: 동기화 토큰까지 스킵 (세미콜론, 중괄호 등)
             if !matches!(
                 self.current(),
@@ -389,12 +457,13 @@ impl Parser {
                 "when".to_string()
             }
             t => {
-                self.errors.push(format!(
-                    "Expected identifier but got {:?} at line {}:{}",
-                    t,
-                    self.current_line(),
-                    self.current_col()
-                ));
+                let e = self.make_error(
+                    "P004",
+                    format!("Expected a name but found {}", token_name(&t)),
+                    "Provide a valid identifier (a name for a variable, function, type, etc.)"
+                        .to_string(),
+                );
+                self.errors.push(e);
                 "_error_".to_string()
             }
         }

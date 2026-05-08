@@ -94,11 +94,12 @@ impl Parser {
                     self.skip_decorator();
                 }
                 _ => {
-                    self.errors.push(format!(
-                        "Unexpected token in mod at line {}:{}",
-                        self.current_line(),
-                        self.current_col()
-                    ));
+                    let e = self.make_error(
+                        "P015",
+                        "Unexpected token inside mod block".to_string(),
+                        "A mod block can only contain fn, struct, enum, or decorator declarations".to_string(),
+                    );
+                    self.errors.push(e);
                     self.advance();
                 }
             }

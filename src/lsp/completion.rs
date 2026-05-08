@@ -96,7 +96,7 @@ fn dot_completions(text: &str, base: &str) -> Option<Vec<CompletionItem>> {
     let src = preprocess_source(text);
     let r = catch_unwind(AssertUnwindSafe(|| -> Option<Vec<CompletionItem>> {
         let tokens = Lexer::new(&src).tokenize();
-        let ast = Parser::new(tokens).parse();
+        let ast = Parser::new(tokens, &src).parse();
 
         // base가 enum 이름인지 확인
         for (item, _) in &ast.items {
@@ -257,7 +257,7 @@ fn extract_decl_completions(src: &str) -> Vec<CompletionItem> {
 fn extract_decl_completions_labeled(src: &str, file_label: &str) -> Vec<CompletionItem> {
     let preprocessed = preprocess_source(src);
     let tokens = Lexer::new(&preprocessed).tokenize();
-    let ast = Parser::new(tokens).parse();
+    let ast = Parser::new(tokens, &preprocessed).parse();
     let mut items = Vec::new();
     let from = if file_label.is_empty() {
         String::new()

@@ -1,3 +1,4 @@
+use crate::analyzer::CompileError;
 use crate::ast::FStringPart;
 use crate::parser::Parser;
 
@@ -5,7 +6,7 @@ use crate::parser::Parser;
 /// 예: "Hello {name}, score={x+1}" -> [Literal("Hello "), Expr(Ident("name")), Literal(", score="), Expr(BinOp...)]
 pub(super) fn parse_fstring_parts(
     raw: &str,
-    errors: &mut Vec<String>,
+    errors: &mut Vec<CompileError>,
     line: usize,
 ) -> Vec<FStringPart> {
     let mut parts = Vec::new();
@@ -38,12 +39,10 @@ pub(super) fn parse_fstring_parts(
                     }
                 }
                 let tokens = crate::lexer::Lexer::new(&expr_src).tokenize();
-                let mut sub_parser = Parser::new(tokens);
+                let mut sub_parser = Parser::new(tokens, "");
                 let expr = sub_parser.parse_expr();
                 if !sub_parser.errors.is_empty() {
-                    for e in sub_parser.errors {
-                        errors.push(format!("f-string expr error at line {}: {}", line, e));
-                    }
+                    errors.extend(sub_parser.errors);
                 }
                 parts.push(FStringPart::Expr(expr));
             }

@@ -40,7 +40,7 @@ pub(super) fn compute_signature_help(text: &str, pos: Position) -> Option<Signat
     // AST에서 함수 정의 찾기
     let src = preprocess_source(text);
     let tokens = Lexer::new(&src).tokenize();
-    let mut par = Parser::new(tokens);
+    let mut par = Parser::new(tokens, &src);
     let ast = par.parse();
     for (item, _) in &ast.items {
         if let TopLevel::Function {

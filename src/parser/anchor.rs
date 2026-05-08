@@ -58,12 +58,12 @@ impl Parser {
                 AnchorKind::Event(event_name)
             }
             k => {
-                self.errors.push(format!(
-                    "Unknown anchor kind: {} at line {}:{}",
-                    k,
-                    self.current_line(),
-                    self.current_col()
-                ));
+                let e = self.make_error(
+                    "P007",
+                    format!("Unknown anchor kind '{}'", k),
+                    "Valid anchor kinds are: main, vault, kill, exit, event".to_string(),
+                );
+                self.errors.push(e);
                 AnchorKind::Plain
             }
         }

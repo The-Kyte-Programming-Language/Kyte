@@ -75,7 +75,9 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                if self.enum_names.contains(&name) {
+                if self.fn_type_params.contains(&name) {
+                    Ty::TypeParam(name)
+                } else if self.enum_names.contains(&name) {
                     Ty::Enum(name)
                 } else {
                     Ty::Struct(name)

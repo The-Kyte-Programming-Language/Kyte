@@ -134,23 +134,28 @@ impl<'ctx> Codegen<'ctx> {
                 name,
                 params,
                 return_ty,
+                type_params,
                 ..
             } = item
             {
-                let param_types: Vec<BasicMetadataTypeEnum> =
-                    params.iter().map(|p| self.ty_to_llvm(&p.ty)).collect();
+                if !type_params.is_empty() {
+                    self.generic_defs.insert(name.clone(), item.clone());
+                } else {
+                    let param_types: Vec<BasicMetadataTypeEnum> =
+                        params.iter().map(|p| self.ty_to_llvm(&p.ty)).collect();
 
-                let fn_type = match return_ty {
-                    Some(ty) => {
-                        let ret_ty = self.ty_to_basic(ty);
-                        ret_ty.fn_type(&param_types, false)
-                    }
-                    None => self.context.void_type().fn_type(&param_types, false),
-                };
+                    let fn_type = match return_ty {
+                        Some(ty) => {
+                            let ret_ty = self.ty_to_basic(ty);
+                            ret_ty.fn_type(&param_types, false)
+                        }
+                        None => self.context.void_type().fn_type(&param_types, false),
+                    };
 
-                let func = self.module.add_function(name, fn_type, None);
-                self.functions.insert(name.clone(), func);
-                self.fn_return_tys.insert(name.clone(), return_ty.clone());
+                    let func = self.module.add_function(name, fn_type, None);
+                    self.functions.insert(name.clone(), func);
+                    self.fn_return_tys.insert(name.clone(), return_ty.clone());
+                }
             }
             if let TopLevel::ExternFn {
                 name,
@@ -243,15 +248,19 @@ impl<'ctx> Codegen<'ctx> {
                 params,
                 return_ty,
                 body,
+                type_params,
                 ..
             } = item
             {
-                fns_to_compile.push(FnToCompile {
-                    name: name.clone(),
-                    params,
-                    return_ty,
-                    body,
-                });
+                if type_params.is_empty() {
+                    fns_to_compile.push(FnToCompile {
+                        name: name.clone(),
+                        params,
+                        return_ty,
+                        body,
+                    });
+                }
+                // generic functions are skipped — emitted on demand by emit_specialization
             }
             if let TopLevel::Impl {
                 trait_name,

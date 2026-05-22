@@ -100,6 +100,24 @@ impl<'ctx> Codegen<'ctx> {
                     return self.i64_type().const_int(0, false).into();
                 }
 
+                // 제네릭 함수 — 타입 추론 후 전문화(specialization) 호출
+                if self.generic_defs.contains_key(name.as_str()) {
+                    let arg_tys: Vec<Ty> =
+                        args.iter().map(|a| self.guess_expr_ty(a, params)).collect();
+                    let mangled = self.emit_specialization_for_args(name, &arg_tys);
+                    let func = self.functions[&mangled];
+                    let compiled_args: Vec<BasicMetadataValueEnum> =
+                        args.iter().map(|a| self.compile_expr(a, params).into()).collect();
+                    let call_site = self
+                        .builder
+                        .build_call(func, &compiled_args, "ret")
+                        .unwrap();
+                    return call_site
+                        .try_as_basic_value()
+                        .basic()
+                        .unwrap_or_else(|| self.i64_type().const_int(0, false).into());
+                }
+
                 // 함수 포인터 변수로 간주 (클로저 호출)
                 if !self.functions.contains_key(name) {
                     if let Some(&fn_ptr_alloca) = self.variables.get(name) {

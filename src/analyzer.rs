@@ -302,8 +302,13 @@ impl Analyzer {
                     params,
                     return_ty,
                     body,
+                    type_params,
                     ..
                 } => {
+                    // 제네릭 함수는 body 분석 건너뜀 — 전문화(specialization)시 타입이 결정됨
+                    if !type_params.is_empty() {
+                        continue;
+                    }
                     let mut scope: HashMap<String, VarInfo> = HashMap::new();
                     for p in params {
                         scope.insert(

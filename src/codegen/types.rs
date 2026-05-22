@@ -44,7 +44,13 @@ impl<'ctx> Codegen<'ctx> {
                 .get(name)
                 .map(|t| (*t).into())
                 .unwrap_or(self.i64_type().into()),
-            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => self.i64_type().into(), // fallback
+            Ty::TypeParam(name) => {
+                if let Some(concrete) = self.type_subst.get(name.as_str()).cloned() {
+                    return self.ty_to_llvm(&concrete);
+                }
+                self.i64_type().into()
+            }
+            Ty::Auto | Ty::Fn(_, _) => self.i64_type().into(),
         }
     }
 
@@ -56,7 +62,13 @@ impl<'ctx> Codegen<'ctx> {
             Ty::I32 | Ty::U32 => self.context.i32_type(),
             Ty::Int | Ty::I64 | Ty::U64 => self.i64_type(),
             Ty::Bool => self.bool_type(),
-            Ty::Enum(_) | Ty::Auto | Ty::TypeParam(_) => self.i64_type(),
+            Ty::TypeParam(name) => {
+                if let Some(concrete) = self.type_subst.get(name.as_str()).cloned() {
+                    return self.ty_to_int_type(&concrete);
+                }
+                self.i64_type()
+            }
+            Ty::Enum(_) | Ty::Auto => self.i64_type(),
             _ => self.i64_type(),
         }
     }
@@ -78,7 +90,13 @@ impl<'ctx> Codegen<'ctx> {
                 .get(name)
                 .map(|t| (*t).into())
                 .unwrap_or(self.i64_type().into()),
-            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => self.i64_type().into(), // fallback
+            Ty::TypeParam(name) => {
+                if let Some(concrete) = self.type_subst.get(name.as_str()).cloned() {
+                    return self.ty_to_basic(&concrete);
+                }
+                self.i64_type().into()
+            }
+            Ty::Auto | Ty::Fn(_, _) => self.i64_type().into(),
         }
     }
 
@@ -158,7 +176,13 @@ impl<'ctx> Codegen<'ctx> {
                 let payload = self.enum_payload_sizes.get(name).copied().unwrap_or(0);
                 return 4 + payload;
             }
-            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => return 8,
+            Ty::TypeParam(name) => {
+                if let Some(concrete) = self.type_subst.get(name.as_str()).cloned() {
+                    return self.type_size_bytes(&concrete);
+                }
+                return 8;
+            }
+            Ty::Auto | Ty::Fn(_, _) => return 8,
             Ty::Struct(_) => {}
         }
         let mut visiting = HashSet::new();
@@ -182,7 +206,13 @@ impl<'ctx> Codegen<'ctx> {
                 let payload = self.enum_payload_sizes.get(name).copied().unwrap_or(0);
                 4 + payload // tag (i32) + payload
             }
-            Ty::Auto | Ty::TypeParam(_) | Ty::Fn(_, _) => 8, // fallback
+            Ty::TypeParam(name) => {
+                if let Some(concrete) = self.type_subst.get(name.as_str()).cloned() {
+                    return self.type_size_bytes_with_visiting(&concrete, visiting);
+                }
+                8
+            }
+            Ty::Auto | Ty::Fn(_, _) => 8,
         }
     }
 

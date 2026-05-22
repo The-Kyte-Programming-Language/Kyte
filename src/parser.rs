@@ -29,6 +29,8 @@ pub struct Parser {
     depth: usize,
     no_struct_init: bool,
     enum_names: std::collections::HashSet<String>,
+    /// 현재 파싱 중인 함수의 제네릭 타입 파라미터 — parse_ty에서 TypeParam 인식에 사용
+    fn_type_params: Vec<String>,
 }
 
 impl Parser {
@@ -54,6 +56,7 @@ impl Parser {
             depth: 0,
             no_struct_init: false,
             enum_names: std::collections::HashSet::new(),
+            fn_type_params: Vec::new(),
         }
     }
 

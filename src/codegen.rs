@@ -16,6 +16,8 @@ mod exprs;
 mod jit;
 #[path = "codegen/liveness.rs"]
 mod liveness;
+#[path = "codegen/mono.rs"]
+mod mono;
 #[path = "codegen/ops.rs"]
 mod ops;
 #[path = "codegen/program.rs"]
@@ -115,6 +117,12 @@ pub struct Codegen<'ctx> {
 
     /// 현재 앵커 이름 스택 — Kill/restart/escalate 로그에 사용
     anchor_name_stack: Vec<String>,
+
+    /// 제네릭 함수 정의 (type_params.is_empty() == false인 함수들)
+    generic_defs: HashMap<String, TopLevel>,
+
+    /// 현재 활성 타입 파라미터 치환 컨텍스트 (emit_specialization 중에만 설정됨)
+    type_subst: HashMap<String, Ty>,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -163,6 +171,8 @@ impl<'ctx> Codegen<'ctx> {
             closure_counter: 0,
             module_names: std::collections::HashSet::new(),
             anchor_name_stack: Vec::new(),
+            generic_defs: HashMap::new(),
+            type_subst: HashMap::new(),
         }
     }
 }

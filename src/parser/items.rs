@@ -17,7 +17,7 @@ impl Parser {
             first_name
         };
 
-        // 제네릭 타입 파라미터 파싱: fn foo<T, U>(...)
+        // 제네릭 타입 파라미터 파싱: function foo<T, U>(...)
         let mut type_params = Vec::new();
         if self.current() == &Token::Lt {
             self.advance();
@@ -30,6 +30,7 @@ impl Parser {
             }
             self.expect(&Token::Gt);
         }
+        self.fn_type_params = type_params.clone();
 
         self.expect(&Token::LParen);
 
@@ -60,6 +61,7 @@ impl Parser {
         self.expect(&Token::LBrace);
         let body = self.parse_body();
         self.expect(&Token::RBrace);
+        self.fn_type_params.clear();
 
         (
             TopLevel::Function {

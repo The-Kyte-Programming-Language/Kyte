@@ -1,0 +1,20 @@
+// Task 7-8 integration test: generic function monomorphization
+
+fn identity<T>(T x) -> T {
+    return x;
+}
+
+fn double_add<T>(T a, T b) -> T {
+    return a + b;
+}
+
+@main(main) {
+    int n = identity(42);
+    print(n);
+
+    float f = identity(3.14);
+    print(f);
+
+    int sum = double_add(10, 20);
+    print(sum);
+}

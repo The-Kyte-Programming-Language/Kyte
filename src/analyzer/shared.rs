@@ -157,6 +157,10 @@ pub fn is_numeric_ty(ty: &Ty) -> bool {
 }
 
 pub fn types_compatible(expected: &Ty, got: &Ty) -> bool {
+    // 제네릭 타입 파라미터는 항상 호환 — 전문화 시 타입이 결정됨
+    if matches!(expected, Ty::TypeParam(_)) || matches!(got, Ty::TypeParam(_)) {
+        return true;
+    }
     if expected == got {
         return true;
     }
